@@ -72,19 +72,32 @@ body{
 .feed .me{color:var(--gold)}
 
 #hud-bottom{
-  position:absolute;left:50%;bottom:max(96px, calc(env(safe-area-inset-bottom) + 88px));
+  position:absolute;left:50%;bottom:max(100px, calc(env(safe-area-inset-bottom) + 92px));
   transform:translateX(-50%);
-  display:flex;flex-direction:column;align-items:center;gap:6px;width:min(300px,58vw);
+  display:flex;flex-direction:column;align-items:center;gap:7px;width:min(340px,64vw);
 }
 #weapon-line{font-family:var(--display);font-size:14px;letter-spacing:.05em;text-shadow:0 2px 6px rgba(0,0,0,.6);display:flex;gap:10px;align-items:baseline}
 #ammo{color:var(--gold);font-variant-numeric:tabular-nums}
 #reload-tag{color:var(--danger);font-size:12px;display:none}
-.bar{width:100%;height:13px;border-radius:8px;background:rgba(10,12,28,.75);border:2px solid rgba(244,246,255,.16);overflow:hidden}
-.bar > i{display:block;height:100%;border-radius:6px;transition:width .12s}
-#hp-fill{background:linear-gradient(180deg,#7bf0b6,var(--mint));width:100%}
-#hp-fill.low{background:linear-gradient(180deg,#ff8a93,var(--danger))}
-#armor-bar{height:9px}
-#armor-fill{background:linear-gradient(180deg,#9fc4ff,#5CA8FF);width:0%}
+.statrow{display:flex;align-items:center;gap:7px;width:100%}
+.stat-ico{font-size:15px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.6));width:18px;text-align:center}
+.bar{position:relative;flex:1;height:20px;border-radius:10px;background:rgba(8,10,24,.82);
+  border:2px solid rgba(244,246,255,.45);overflow:hidden;
+  box-shadow:0 2px 8px rgba(0,0,0,.45), inset 0 2px 4px rgba(0,0,0,.5)}
+.bar > i{display:block;height:100%;transition:width .12s;
+  box-shadow:inset 0 -5px 8px rgba(0,0,0,.28), inset 0 3px 4px rgba(255,255,255,.35)}
+.bar .ticks{position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(to right, transparent 0, transparent calc(25% - 2px), rgba(8,10,24,.55) calc(25% - 2px), rgba(8,10,24,.55) 25%)}
+.bar b{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  font-size:13px;font-weight:800;color:var(--ink);text-shadow:0 1px 3px rgba(0,0,0,.85);
+  font-variant-numeric:tabular-nums;font-style:normal}
+#hp-fill{background:linear-gradient(180deg,#8df5bf,#35c97e);width:100%}
+#hp-fill.low{background:linear-gradient(180deg,#ff8a93,var(--danger));animation:hp-pulse .9s infinite}
+@keyframes hp-pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.45)}}
+.bar.armor{height:15px}
+#armor-fill{background:linear-gradient(180deg,#b7d4ff,#4d9bff);width:0%}
+#armor-row{opacity:.45;transition:opacity .2s}
+#armor-row.has{opacity:1}
 
 #vignette{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .3s;
   background:radial-gradient(ellipse at center, transparent 52%, rgba(255,60,72,.55) 100%)}
@@ -190,8 +203,8 @@ body{
     <div id="hud-topright"><canvas id="minimap" width="92" height="92"></canvas></div>
     <div id="hud-bottom">
       <div id="weapon-line"><span id="weapon-name">PISTOL</span><span id="ammo">12 / 12</span><span id="reload-tag">RELOADING…</span></div>
-      <div class="bar"><i id="hp-fill"></i></div>
-      <div class="bar" id="armor-bar"><i id="armor-fill"></i></div>
+      <div class="statrow"><span class="stat-ico">❤️</span><div class="bar"><i id="hp-fill"></i><em class="ticks"></em><b id="hp-num">100</b></div></div>
+      <div class="statrow" id="armor-row"><span class="stat-ico">🛡️</span><div class="bar armor"><i id="armor-fill"></i><em class="ticks"></em><b id="armor-num">0</b></div></div>
     </div>
     <div id="vignette"></div>
     <div id="toasts"></div>

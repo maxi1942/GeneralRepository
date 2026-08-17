@@ -89,26 +89,95 @@ const app = $('app');
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 app.insertBefore(renderer.domElement, app.firstChild);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9fd4e8);
-scene.fog = new THREE.Fog(0x9fd4e8, 90, 190);
+scene.fog = new THREE.Fog(0xb8dff0, 110, 240);
 
 const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.5, 400);
 const CAM_OFF = new THREE.Vector3(0, 34, 19);
 function fitCamera() {
-  // portrait phones need to sit higher to see combat ranges
-  if (innerHeight > innerWidth) { CAM_OFF.set(0, 50, 26); camera.fov = 54; }
-  else { CAM_OFF.set(0, 36, 20); camera.fov = 48; }
+  // lower ~40° pitch reads properly 3D; portrait sits further back to keep combat ranges visible
+  if (innerHeight > innerWidth) { CAM_OFF.set(0, 27, 34); camera.fov = 56; }
+  else { CAM_OFF.set(0, 21, 26); camera.fov = 50; }
   camera.updateProjectionMatrix();
 }
 fitCamera();
 
-scene.add(new THREE.HemisphereLight(0xdfefff, 0x6a9a50, 0.95));
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.15);
-sun.position.set(40, 70, 25);
-scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xdfefff, 0x6a9a50, 0.48));
+const sun = new THREE.DirectionalLight(0xfff2d8, 1.6);
+sun.position.set(28, 70, 16);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -70; sun.shadow.camera.right = 70;
+sun.shadow.camera.top = 70; sun.shadow.camera.bottom = -70;
+sun.shadow.camera.near = 15; sun.shadow.camera.far = 200;
+sun.shadow.bias = -0.0006;
+scene.add(sun, sun.target);
+function moveSun(x, z) {
+  sun.position.set(x + 28, 70, z + 16);
+  sun.target.position.set(x, 0, z);
+}
+
+/* sky dome + drifting clouds for depth */
+(function buildSky() {
+  const cv = document.createElement('canvas');
+  cv.width = 2; cv.height = 256;
+  const c = cv.getContext('2d');
+  const gr = c.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0, '#4f9fd8');
+  gr.addColorStop(0.55, '#8ecbe8');
+  gr.addColorStop(0.78, '#cfeaf2');
+  gr.addColorStop(1, '#e8f4e0');
+  c.fillStyle = gr; c.fillRect(0, 0, 2, 256);
+  const tex = new THREE.CanvasTexture(cv);
+  if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(330, 24, 14),
+    new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide, fog: false, depthWrite: false })
+  );
+  dome.renderOrder = -1;
+  scene.add(dome);
+})();
+const clouds = [];
+(function buildClouds() {
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.92, flatShading: true });
+  for (let i = 0; i < 9; i++) {
+    const g = new THREE.Group();
+    const n = randInt(3, 5);
+    for (let p = 0; p < n; p++) {
+      const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(rand(3, 6), 1), mat);
+      puff.position.set(rand(-7, 7), rand(-1.2, 1.2), rand(-3.5, 3.5));
+      puff.scale.y = 0.55;
+      g.add(puff);
+    }
+    g.position.set(rand(-170, 170), rand(34, 58), rand(-170, 170));
+    g.userData.speed = rand(1.2, 2.6);
+    scene.add(g);
+    clouds.push(g);
+  }
+})();
+function animateClouds(dt) {
+  for (const c of clouds) {
+    c.position.x += c.userData.speed * dt;
+    if (c.position.x > 200) c.position.x = -200;
+  }
+}
+/* distant hills ring the map so the horizon has depth */
+(function buildHills() {
+  const mats = [0x5d9a4c, 0x548f46, 0x4a8140].map(c => new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
+  for (let i = 0; i < 16; i++) {
+    const ang = (i / 16) * Math.PI * 2 + rand(-0.15, 0.15);
+    const d = rand(185, 225);
+    const h = new THREE.Mesh(new THREE.IcosahedronGeometry(rand(16, 34), 1), mats[i % 3]);
+    h.position.set(Math.sin(ang) * d, rand(-16, -9), Math.cos(ang) * d);
+    h.scale.y = rand(0.5, 0.8);
+    scene.add(h);
+  }
+})();
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -119,18 +188,39 @@ addEventListener('resize', () => {
 /* ---------------- world ---------------- */
 const obstacles = [];   // {x, z, r}
 (function buildWorld() {
+  // grass texture: subtle noise + blades so movement produces parallax and the plane reads 3D
+  const gcv = document.createElement('canvas');
+  gcv.width = gcv.height = 256;
+  const gc = gcv.getContext('2d');
+  gc.fillStyle = '#86b85c'; gc.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 500; i++) {
+    gc.fillStyle = Math.random() < 0.5 ? 'rgba(104,152,68,0.65)' : 'rgba(154,200,108,0.65)';
+    gc.fillRect(Math.random() * 256, Math.random() * 256, rand(2, 6), rand(2, 6));
+  }
+  gc.strokeStyle = 'rgba(96,142,60,0.85)'; gc.lineWidth = 2;
+  for (let i = 0; i < 160; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256;
+    gc.beginPath(); gc.moveTo(x, y); gc.lineTo(x + rand(-3, 3), y - rand(5, 10)); gc.stroke();
+  }
+  const gtex = new THREE.CanvasTexture(gcv);
+  if ('colorSpace' in gtex) gtex.colorSpace = THREE.SRGBColorSpace;
+  gtex.wrapS = gtex.wrapT = THREE.RepeatWrapping;
+  gtex.repeat.set(30, 30);
+  gtex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
   const ground = new THREE.Mesh(
     new THREE.CircleGeometry(MAP_HALF + 70, 48),
-    new THREE.MeshLambertMaterial({ color: 0x86b85c })
+    new THREE.MeshLambertMaterial({ map: gtex })
   );
   ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
   scene.add(ground);
 
   // darker grass patches
   {
     const g = new THREE.CircleGeometry(1, 12);
-    const m = new THREE.MeshLambertMaterial({ color: 0x79ac52 });
+    const m = new THREE.MeshLambertMaterial({ color: 0x568a38, transparent: true, opacity: 0.45 });
     const inst = new THREE.InstancedMesh(g, m, 90);
+    inst.receiveShadow = true;
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
     for (let i = 0; i < 90; i++) {
       const s = rand(2, 7);
@@ -156,12 +246,15 @@ const obstacles = [];   // {x, z, r}
     const N = 30;
     const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.55, 0.75, 3.4, 7), new THREE.MeshLambertMaterial({ color: 0x8a6242 }), N);
     const leaf = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0x4e9a5e, flatShading: true }), N);
+    trunk.castShadow = leaf.castShadow = true;
+    leaf.receiveShadow = true;
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(1, 1, 1);
     let i = 0;
     place(N, 1.0, 1.3, (x, z) => {
-      mtx.compose(new THREE.Vector3(x, 1.7, z), q, up); trunk.setMatrixAt(i, mtx);
-      const s = rand(2.2, 3.4);
-      mtx.compose(new THREE.Vector3(x, 3.4 + s * 0.55, z), q, new THREE.Vector3(s, s * rand(0.9, 1.2), s)); leaf.setMatrixAt(i, mtx);
+      const sy = rand(0.9, 1.6);
+      mtx.compose(new THREE.Vector3(x, 1.7 * sy, z), q, new THREE.Vector3(1, sy, 1)); trunk.setMatrixAt(i, mtx);
+      const s = rand(2.2, 3.6);
+      mtx.compose(new THREE.Vector3(x, 3.4 * sy + s * 0.5, z), q, new THREE.Vector3(s, s * rand(0.9, 1.25), s)); leaf.setMatrixAt(i, mtx);
       i++;
     });
     scene.add(trunk, leaf);
@@ -170,6 +263,7 @@ const obstacles = [];   // {x, z, r}
   {
     const N = 24;
     const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(3, 2.6, 3), new THREE.MeshLambertMaterial({ color: 0xc89b5e }), N);
+    inst.castShadow = inst.receiveShadow = true;
     const mtx = new THREE.Matrix4(), s = new THREE.Vector3(1, 1, 1);
     let i = 0;
     place(N, 1.9, 1.9, (x, z) => {
@@ -182,6 +276,7 @@ const obstacles = [];   // {x, z, r}
   {
     const N = 16;
     const inst = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1.6, 0), new THREE.MeshLambertMaterial({ color: 0xa7adc2, flatShading: true }), N);
+    inst.castShadow = inst.receiveShadow = true;
     const mtx = new THREE.Matrix4();
     let i = 0;
     place(N, 1.5, 2.2, (x, z, r) => {
@@ -281,10 +376,7 @@ function makeBean(colorHex, hatId) {
     hat.position.y = 2.62;
     g.add(hat);
   }
-  // blob shadow
-  const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.85, 14), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 }));
-  shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.03;
-  g.add(shadow);
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   return { group: g, body, gun };
 }
 
@@ -350,6 +442,7 @@ function spawnLoot() {
       mesh = new THREE.Mesh(lootGeos.armor, new THREE.MeshLambertMaterial({ color: 0x5ca8ff, emissive: 0x1c4f8a, emissiveIntensity: 0.4 }));
     }
     mesh.position.set(x, 1, z);
+    mesh.castShadow = true;
     scene.add(mesh);
     loot.push({ kind, weapon, mesh, x, z, t: rand(0, 6) });
   };
@@ -418,7 +511,7 @@ function killAgent(a, attacker) {
   // drop a med where they fell
   if (Math.random() < 0.5) {
     const mesh = new THREE.Mesh(lootGeos.med, new THREE.MeshLambertMaterial({ color: 0x5de0a6, emissive: 0x1d7a52, emissiveIntensity: 0.4 }));
-    mesh.position.set(a.x, 1, a.z); scene.add(mesh);
+    mesh.position.set(a.x, 1, a.z); mesh.castShadow = true; scene.add(mesh);
     loot.push({ kind: 'med', mesh, x: a.x, z: a.z, t: 0 });
   }
   if (a.isPlayer) {
@@ -723,6 +816,9 @@ function updateHUD() {
   hpFill.style.width = Math.max(0, player.hp) + '%';
   hpFill.classList.toggle('low', player.hp <= 35);
   armorFill.style.width = player.armor + '%';
+  $('hp-num').textContent = Math.max(0, Math.ceil(player.hp));
+  $('armor-num').textContent = Math.round(player.armor);
+  $('armor-row').classList.toggle('has', player.armor > 0);
 }
 
 /* ---------------- zone messages ---------------- */
@@ -946,6 +1042,7 @@ function updateCamera(dt) {
   camera.position.y = lerp(camera.position.y, ty, k);
   camera.position.z = lerp(camera.position.z, tz, k);
   camera.lookAt(camera.position.x, 1.2, camera.position.z - CAM_OFF.z * 0.995);
+  moveSun(player.x, player.z);
 }
 camera.position.set(0, CAM_OFF.y, CAM_OFF.z + 60);
 camera.lookAt(0, 0, 40);
@@ -1014,6 +1111,7 @@ function frame(now) {
     updateAgents(dt);
     updateBullets(dt);
     animateLoot(dt);
+    animateClouds(dt);
     updateCamera(dt);
     if (vignetteT > 0) { vignetteT -= dt; if (vignetteT <= 0) vignette.style.opacity = 0; }
     hudT -= dt;
@@ -1025,9 +1123,11 @@ function frame(now) {
   } else {
     // idle menu: slow orbit over the empty map
     const t = now / 1000;
-    camera.position.set(Math.sin(t * 0.08) * 70, 42, Math.cos(t * 0.08) * 70);
+    camera.position.set(Math.sin(t * 0.08) * 70, 36, Math.cos(t * 0.08) * 70);
     camera.lookAt(0, 0, 0);
+    moveSun(0, 0);
     animateLoot(dt);
+    animateClouds(dt);
   }
   renderer.render(scene, camera);
 }
