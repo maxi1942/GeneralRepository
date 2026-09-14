@@ -1,14 +1,14 @@
-"""Fetch live Copenhagen for-sale listings from Boliga and snapshot them.
+"""Fetch live for-sale listings AND recent sold records from Boliga.
 
 Boliga's public site is backed by an undocumented JSON API at api.boliga.dk.
-This module pages through the for-sale search endpoint for the configured
-postal-code scope and writes one gzipped CSV snapshot per run into data/raw/.
+This module pages through two endpoints for the configured postal-code scope:
+  - for-sale search  -> active listings (asking prices, days-on-market, cuts)
+  - sold search      -> realised sale prices from the land registry (lags ~1-3 mo)
 
-The snapshot is deliberately raw (one row per listing, all fields we care about)
-so metrics.py can (a) compute aggregates and (b) diff listing IDs against the
-previous snapshot to derive new / delisted flow.
+Each run writes one gzipped CSV snapshot per feed. Snapshots are deliberately raw
+(one row per listing) so metrics.py can aggregate them and diff IDs for flow.
 
-The API is undocumented, so field access is defensive: we probe a few candidate
+The API is undocumented, so field access is defensive: we probe several candidate
 key spellings for each value and tolerate missing fields rather than crashing.
 """
 
@@ -18,7 +18,7 @@ import csv
 import gzip
 import logging
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +26,7 @@ import requests
 
 log = logging.getLogger("boliga.scraper")
 
-# Fields we persist per listing. Each maps to a list of candidate keys in the
-# Boliga payload (spellings have drifted across API versions), tried in order.
+# For-sale fields. Each maps to candidate keys tried in order.
 FIELD_CANDIDATES: dict[str, list[str]] = {
     "id": ["id", "estateId", "guid"],
     "price": ["price"],
@@ -39,11 +38,29 @@ FIELD_CANDIDATES: dict[str, list[str]] = {
     "property_type": ["propertyType"],
     "zip_code": ["zipCode", "postalCode"],
     "city": ["city"],
+    "street": ["street", "address", "road"],
     "build_year": ["buildYear", "yearBuilt"],
     "is_foreclosure": ["isForeclosure", "foreclosure"],
     "created_date": ["createdDate", "created"],
     "latitude": ["latitude", "lat"],
     "longitude": ["longitude", "lng", "lon"],
+}
+
+# Sold-record fields.
+SOLD_FIELD_CANDIDATES: dict[str, list[str]] = {
+    "price": ["price", "amount", "soldPrice"],
+    "sqm_price": ["squaremeterPrice", "sqmPrice", "squareMeterPrice"],
+    "size_m2": ["size", "livingArea", "area"],
+    "rooms": ["rooms", "roomCount"],
+    # % change from original listing to realised sale, if Boliga provides it — this is
+    # the realised sale-to-ask discount when present.
+    "change_pct": ["change", "priceChangePercentTotal", "changePercent"],
+    "property_type": ["propertyType"],
+    "zip_code": ["zipCode", "postalCode"],
+    "city": ["city"],
+    "street": ["street", "address", "road"],
+    "sold_date": ["soldDate", "saleDate", "date"],
+    "sale_type": ["saleType", "saleTypeName"],
 }
 
 USER_AGENT = (
@@ -59,12 +76,11 @@ def _pick(record: dict[str, Any], candidates: list[str]) -> Any:
     return None
 
 
-def _normalise(record: dict[str, Any]) -> dict[str, Any]:
-    return {field: _pick(record, keys) for field, keys in FIELD_CANDIDATES.items()}
+def _normalise(record: dict[str, Any], candidates: dict[str, list[str]]) -> dict[str, Any]:
+    return {field: _pick(record, keys) for field, keys in candidates.items()}
 
 
 def _extract_results(payload: Any) -> list[dict[str, Any]]:
-    """Boliga has wrapped results under different keys; handle the common shapes."""
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
@@ -106,69 +122,82 @@ def _get(session: requests.Session, url: str, params: dict[str, Any],
     raise RuntimeError(f"giving up after {max_retries} attempts: {last_err}")
 
 
-def fetch_listings(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    """Page through the for-sale endpoint and return normalised listing rows."""
-    scr = cfg["scraper"]
-    base_query = dict(cfg.get("query_params", {}))
-
+def _paged_fetch(base_url: str, base_query: dict[str, Any], page_size: int,
+                 max_pages: int, timeout: int, sleep_s: float, max_retries: int,
+                 candidates: dict[str, list[str]], label: str,
+                 dedupe_key: str | None) -> list[dict[str, Any]]:
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
 
     rows: list[dict[str, Any]] = []
-    seen_ids: set[Any] = set()
+    seen: set[Any] = set()
     page = 1
     total: int | None = None
 
-    while page <= scr["max_pages"]:
-        params = {**base_query, "pageSize": scr["page_size"], "page": page}
-        payload = _get(session, scr["base_url"], params,
-                       scr["request_timeout_sec"], scr["max_retries"])
-
+    while page <= max_pages:
+        params = {**base_query, "pageSize": page_size, "page": page}
+        payload = _get(session, base_url, params, timeout, max_retries)
         results = _extract_results(payload)
         if page == 1:
             total = _total_count(payload)
-            log.info("Boliga request: %s params=%s -> total=%s, page1 results=%d",
-                     scr["base_url"], params, total, len(results))
-
+            log.info("%s request: %s params=%s -> total=%s, page1 results=%d",
+                     label, base_url, params, total, len(results))
         if not results:
-            log.info("no results on page %d — stopping", page)
             break
-
         for rec in results:
-            norm = _normalise(rec)
-            rid = norm.get("id")
-            if rid is not None and rid in seen_ids:
-                continue  # dedupe across pages
-            if rid is not None:
-                seen_ids.add(rid)
+            norm = _normalise(rec, candidates)
+            if dedupe_key:
+                k = norm.get(dedupe_key)
+                if k is not None and k in seen:
+                    continue
+                if k is not None:
+                    seen.add(k)
             rows.append(norm)
-
-        if len(results) < scr["page_size"]:
+        if len(results) < page_size:
             break
         if total is not None and len(rows) >= total:
             break
-
         page += 1
-        time.sleep(scr["sleep_between_requests_sec"])
+        time.sleep(sleep_s)
 
-    log.info("collected %d unique listings across %d page(s)", len(rows), page)
+    log.info("%s: collected %d rows across %d page(s)", label, len(rows), page)
     return rows
 
 
-def save_snapshot(rows: list[dict[str, Any]], cfg: dict[str, Any],
-                  project_dir: Path, snapshot_date: date | None = None) -> Path:
-    """Write listings to data/raw/<date>.csv.gz. Returns the path written."""
-    snapshot_date = snapshot_date or date.today()
-    raw_dir = project_dir / cfg["paths"]["raw_dir"]
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    out_path = raw_dir / f"{snapshot_date.isoformat()}.csv.gz"
+def fetch_listings(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    scr = cfg["scraper"]
+    return _paged_fetch(
+        scr["base_url"], dict(cfg.get("query_params", {})),
+        scr["page_size"], scr["max_pages"], scr["request_timeout_sec"],
+        scr["sleep_between_requests_sec"], scr["max_retries"],
+        FIELD_CANDIDATES, "for-sale", dedupe_key="id")
 
-    fieldnames = list(FIELD_CANDIDATES.keys())
+
+def fetch_sold(cfg: dict[str, Any], today: date | None = None) -> list[dict[str, Any]]:
+    sold = cfg["sold"]
+    today = today or date.today()
+    since = (today - timedelta(days=sold["lookback_days"])).isoformat()
+    base_query = {
+        **dict(cfg.get("sold_query_params", {})),
+        "salesDateMin": since,
+        "salesDateMax": today.isoformat(),
+    }
+    return _paged_fetch(
+        sold["base_url"], base_query,
+        sold["page_size"], sold["max_pages"], cfg["scraper"]["request_timeout_sec"],
+        cfg["scraper"]["sleep_between_requests_sec"], cfg["scraper"]["max_retries"],
+        SOLD_FIELD_CANDIDATES, "sold", dedupe_key=None)
+
+
+def save_snapshot(rows: list[dict[str, Any]], out_dir: Path, fieldnames: list[str],
+                  snapshot_date: date | None = None) -> Path:
+    snapshot_date = snapshot_date or date.today()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{snapshot_date.isoformat()}.csv.gz"
     with gzip.open(out_path, "wt", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
-
     log.info("wrote snapshot: %s (%d rows)", out_path, len(rows))
     return out_path

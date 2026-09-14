@@ -1,53 +1,61 @@
 # Copenhagen housing market monitor — configuration
 #
 # Everything the pipeline needs is here so you can adjust scope WITHOUT touching code.
-# The most likely thing you'll tune on first run is `query_params` (see note below).
 
-# Geographic scope. Boliga's for-sale API filters by postal code.
-# Default 1000-2500 covers Copenhagen municipality (1000-2499) + Frederiksberg
-# (1800-2000) + Valby (2500). Narrow or widen as you like.
 scope:
   name: "Copenhagen + Frederiksberg"
   zipcode_from: 1000
   zipcode_to: 2500
 
-# Raw query parameters sent to Boliga's for-sale endpoint.
-# IMPORTANT: Boliga's API is undocumented and has changed its parameter names
-# over time. If the FIRST GitHub Action run returns 0 listings, the most likely
-# cause is that these param names are stale. Check the run log (it prints the
-# request URL + result count), then adjust here. Known-working alternatives:
-#   - zipcodeFrom / zipcodeTo         (range, used by default below)
-#   - zipCodes: "1000-2500"           (single range string)
-#   - zipCodes: "1050,1051,2100,..."  (explicit comma list)
-# Anything you put under `query_params` is passed straight through as query args,
-# so you can switch styles without editing scraper.py.
+# Raw query parameters sent to Boliga's FOR-SALE endpoint.
+# If a run returns 0 listings, these param names have most likely drifted — the run
+# log prints the request URL + count. Known-working alternatives:
+#   zipcodeFrom / zipcodeTo  (range, default) · zipCodes: "1000-2500" · zipCodes: "1050,1051,..."
 query_params:
   zipcodeFrom: 1000
   zipcodeTo: 2500
-  # Leave propertyType blank to fetch all types; we segment by type afterwards.
-  # propertyType: 3   # 1=villa, 2=townhouse, 3=apartment(ejerlejlighed), 4=holiday
 
-# Property-type segmentation for metrics. Boliga integer codes -> our buckets.
-# Codes verified against a live 2026-09-14 Copenhagen snapshot (2,159 listings):
-#   3 = ejerlejlighed (apartment) — dominant in Copenhagen
-#   1 = villa, 2 = rækkehus (townhouse)
-#   9 = villa-apartment / co-op-like, 4 = holiday, 5/6 = land, 11 = andel — all noise here
-# Anything not listed falls into "other".
+# Raw query parameters sent to Boliga's SOLD endpoint (realised sale prices, from the
+# land registry — lags ~1-3 months). salesDateMin/Max are filled in automatically from
+# `sold.lookback_days`; anything set here is passed through as-is.
+sold_query_params:
+  zipcodeFrom: 1000
+  zipcodeTo: 2500
+
+# District definitions — postcode ranges (approximate; postcode != neighbourhood
+# exactly, but close). Listings are tagged by the first district whose range contains
+# their postcode. Order matters only for display.
+districts:
+  koebenhavn_k:    { label: "København K",     ranges: [[1050, 1473]] }
+  vesterbro:       { label: "Vesterbro",       ranges: [[1500, 1799]] }
+  frederiksberg_c: { label: "Frederiksberg C", ranges: [[1800, 1999]] }
+  oesterbro:       { label: "Østerbro",        ranges: [[2100, 2100]] }
+  noerrebro:       { label: "Nørrebro",        ranges: [[2200, 2200]] }
+
+# Property-type segmentation. Codes verified against a live 2026-09-14 snapshot:
+#   3 = ejerlejlighed (apartment) · 1 = villa · 2 = rækkehus (townhouse)
+#   9/4/5/6/11 = co-op-like / holiday / land / andel -> "other"
 property_type_buckets:
-  apartment: [3]          # ejerlejlighed — dominates Copenhagen
-  house: [1, 2]           # villa + rækkehus/townhouse
+  apartment: [3]
+  house: [1, 2]
 
-# Scraper behaviour
 scraper:
   base_url: "https://api.boliga.dk/api/v2/search/results"
   page_size: 100
-  max_pages: 200            # hard safety cap (200 * 100 = 20k listings)
+  max_pages: 200
   request_timeout_sec: 30
-  sleep_between_requests_sec: 0.7   # be polite; reduces rate-limit / ToS risk
+  sleep_between_requests_sec: 0.7
   max_retries: 4
 
-# Where data lands (relative to this project dir)
+sold:
+  base_url: "https://api.boliga.dk/api/v2/sold/search/results"
+  lookback_days: 90          # trailing window used for sold stats + months-of-supply
+  page_size: 100
+  max_pages: 200
+  enabled: true              # set false to skip the sold fetch entirely
+
 paths:
   raw_dir: "data/raw"
+  sold_raw_dir: "data/sold_raw"
   metrics_csv: "data/metrics_weekly.csv"
   dashboard_html: "dashboard.html"
