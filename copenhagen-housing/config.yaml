@@ -98,7 +98,7 @@ detail:
     - "https://api.boliga.dk/api/v2/property/{id}"
     - "https://api.boliga.dk/api/v2/estates/{id}"
     - "https://api.boliga.dk/api/v1/estate/{id}"
-  max_per_run: 30            # discovery cap; raise once the endpoint is confirmed
+  max_per_run: 250           # endpoint confirmed (api/v2/estate/{id}); candidates first
   sleep_between_requests_sec: 0.8
   cache: "data/details.csv.gz"
 

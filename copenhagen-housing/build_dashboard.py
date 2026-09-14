@@ -263,6 +263,11 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
             "e": int(est) if est else None,          # comps-based expected sold DKK/m²
             "g": _num(r.get("gap_pct")),             # asking vs comps, %
             "nc": M._to_int(r.get("n_comps")) or 0,  # number of comps behind the estimate
+            "en": r.get("energy"),                   # energy class A-G
+            "fl": r.get("flags") or [],              # 'why cheap?' flags
+            "au": r.get("estate_url"),               # agent listing url
+            "ls": M._to_int(r.get("last_sold_price")) or None,  # prior sale price
+            "dt": 1 if r.get("detailed") else 0,     # detail fetched yet?
         })
     labels["other"] = "Other Copenhagen"
     return {"items": items, "labels": labels}
@@ -280,29 +285,35 @@ EXPLORE_HTML = """
     <label>Min m²<input id="f-smin" type="number" min="0" step="5" placeholder="any"></label>
     <label>Max m²<input id="f-smax" type="number" min="0" step="5" placeholder="any"></label>
     <label class="grow">Street contains<input id="f-street" type="text" placeholder="e.g. Istedgade"></label>
+    <label>Energy<select id="f-energy">
+      <option value="">Any</option><option>A</option><option>B</option><option>C</option>
+      <option>D</option><option>E</option><option>F</option><option>G</option></select></label>
     <label>Sort by<select id="f-sort">
       <option value="value">Best value (asking vs comps)</option>
       <option value="sp-desc">DKK/m² (high → low)</option>
       <option value="sp-asc">DKK/m² (low → high)</option>
       <option value="dom-desc">Longest on market</option>
     </select></label>
+    <label class="chk"><input type="checkbox" id="f-clean"> Hide flagged (find clean bargains)</label>
   </div>
   <div id="ex-stats" class="kpi-row explore-stats"></div>
   <div class="table-wrap"><table id="ex-table"><thead><tr>
     <th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
     <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
-    <th class="num">vs comps</th><th class="num">Days</th><th class="num">Cut</th>
+    <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="ex-more" class="more"></div>
   <p class="methodology">“Est. sold /m²” is the median price per m² of comparable <em>sold</em> homes
   (same district, property type, ±25% size and, where possible, same rooms). “vs comps” is how far
   asking sits above (+) or below (−) that — asking is normally a few % above realised sales, so treat
   small positives as normal. Co-op (andel) listings, foreclosures and rows with an implausible price/m²
-  are excluded; “n=” flags low comp counts. <strong>Big caveat on the “best value” sort:</strong> the
-  most-negative rows are usually cheap <em>for a reason</em> the model can't see — leasehold land
-  (e.g. Refshaleøen), a bad floor or condition, an odd layout, or a special micro-location. Treat them
-  as “why is this cheap?” candidates to inspect and click through to the listing — <strong>not</strong>
-  verified bargains. A trustworthy undervalued-finder needs per-listing attributes we don't yet scrape.</p>
+  are excluded; “n=” flags low comp counts. The <strong>“Why cheap?”</strong> column now surfaces
+  visible reasons from each listing's detail page — poor <b>energy</b> class, <b>leasehold</b> land, a
+  <b>ground floor</b>, or a <b>stale</b> listing. A big negative “vs comps” with a <b>✓ clean</b> tag is
+  the genuinely interesting one; tick <b>“Hide flagged”</b> to hunt those. Detail is fetched a few
+  hundred listings per week (candidates first), so some rows read <em>pending…</em> until enriched.
+  Balcony/condition aren't in Boliga's data — they're only in the agent's description behind the link.
+  Even clean, this is a screen to shortlist and inspect, not a valuation.</p>
 </section>
 """
 
@@ -324,13 +335,16 @@ EXPLORE_JS = """
   function apply(){
     var d=$('f-dist').value, rm=$('f-rooms').value,
         smin=parseFloat($('f-smin').value), smax=parseFloat($('f-smax').value),
-        st=$('f-street').value.trim().toLowerCase();
+        st=$('f-street').value.trim().toLowerCase(),
+        en=$('f-energy').value, clean=$('f-clean').checked;
     var f=items.filter(function(x){
       if(d && x.d!==d) return false;
       if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
       if(!isNaN(smin) && (x.s==null||x.s<smin)) return false;
       if(!isNaN(smax) && (x.s==null||x.s>smax)) return false;
       if(st && x.st.toLowerCase().indexOf(st)<0) return false;
+      if(en && x.en!==en) return false;
+      if(clean && (x.fl&&x.fl.length)) return false;
       return true;
     });
     var sp=f.map(function(x){return x.sp;}),
@@ -359,14 +373,21 @@ EXPLORE_JS = """
       var addr = (x.st||'').replace(/</g,'');
       var gq = encodeURIComponent((x.st||'')+', '+(x.z||'')+' København');
       var glink = '<a class="glink" target="_blank" rel="noopener" href="https://www.google.com/search?q='+gq+'" title="Search this address">⌕</a>';
-      var stcell = x.u
-        ? '<a target="_blank" rel="noopener" href="https://www.boliga.dk/bolig/'+x.u+'">'+(addr||'listing')+'</a> '+glink
+      var href = x.au ? x.au : (x.u? 'https://www.boliga.dk/bolig/'+x.u : null);
+      var stcell = href
+        ? '<a target="_blank" rel="noopener" href="'+href+'">'+(addr||'listing')+'</a> '+glink
         : (addr||'–')+' '+glink;
+      var en = x.en? '<span class="energy e'+x.en+'">'+x.en+'</span>' : '–';
+      var flags = !x.dt ? '<span class="pending">pending…</span>'
+        : ((x.fl&&x.fl.length)
+            ? x.fl.map(function(t){return '<span class="flag">'+t+'</span>';}).join(' ')
+            : '<span class="ok">✓ clean</span>');
       return '<tr><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
         (x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+fmtdkk(x.p)+
         '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
         (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
-        '</td><td class="num '+gcls+'">'+gap+'</td><td class="num">'+(x.dom==null?'–':x.dom)+
+        '</td><td class="num '+gcls+'">'+gap+'</td><td>'+en+'</td><td class="flags">'+flags+
+        '</td><td class="num">'+(x.dom==null?'–':x.dom)+
         '</td><td class="num">'+(x.cut<0? x.cut.toFixed(0)+'%':'–')+'</td></tr>';
     }).join('');
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
@@ -447,6 +468,16 @@ td.gap-lo{color:#0ca30c;font-weight:600;} td.gap-hi{color:var(--ink2);}
 table a{color:var(--c1);text-decoration:none;} table a:hover{text-decoration:underline;}
 .glink{display:inline-block;margin-left:4px;color:var(--muted);font-size:13px;text-decoration:none;}
 .glink:hover{color:var(--c1);}
+.filters .chk{flex-direction:row;align-items:center;gap:6px;font-size:13px;color:var(--ink);align-self:end;padding-bottom:7px;}
+.filters .chk input{width:auto;}
+.energy{display:inline-block;min-width:18px;text-align:center;padding:1px 5px;border-radius:4px;
+font-weight:600;font-size:12px;color:#fff;background:var(--muted);}
+.energy.eA,.energy.eB{background:#0ca30c;} .energy.eC,.energy.eD{background:#eda100;color:#1a1a19;}
+.energy.eE,.energy.eF,.energy.eG{background:#d03b3b;}
+td.flags{white-space:normal;max-width:220px;}
+.flag{display:inline-block;background:rgba(208,59,59,.12);color:#d03b3b;border-radius:4px;
+padding:1px 6px;font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;}
+.ok{color:#0ca30c;font-size:12px;} .pending{color:var(--muted);font-size:11px;font-style:italic;}
 .methodology{color:var(--muted);font-size:12px;line-height:1.5;margin-top:12px;}
 .methodology strong{color:var(--ink2);} .methodology em{font-style:italic;}
 .note{margin-top:32px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);
