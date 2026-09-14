@@ -322,7 +322,7 @@ header p{margin:0;color:var(--ink2);max-width:74ch;}
 .asof{color:var(--muted);font-size:13px;margin-top:8px;}
 h2.section{font-size:15px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
 margin:36px 0 14px;border-top:1px solid var(--border);padding-top:22px;}
-.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:24px 0;}
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0;}
 .kpi{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;}
 .kpi-label{color:var(--ink2);font-size:13px;}
 .kpi-value{font-size:24px;font-weight:600;margin:6px 0 4px;letter-spacing:-.01em;}
@@ -398,7 +398,13 @@ def build_html(rows, active, cfg, generated) -> str:
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CPH Housing">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Copenhagen Housing Monitor</title><style>{CSS}</style></head>
 <body><div class="wrap">
 <header><h1>Copenhagen Housing Monitor</h1>
