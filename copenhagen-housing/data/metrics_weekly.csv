@@ -1,0 +1,5 @@
+snapshot_date,segment,n_listings,median_sqm_price,mean_sqm_price,median_price,median_days_on_market,pct_price_cut,median_cut_pct,new_listings,delisted
+2026-09-14,all,2159,81271.0,82839.6,7199000.0,59.0,41.0,4.0,,
+2026-09-14,apartment,81,80391.0,87154.0,10495000.0,45.0,35.8,4.0,,
+2026-09-14,house,1998,81337.0,82725.7,7095000.0,58.0,40.9,4.0,,
+2026-09-14,other,80,79087.0,81190.8,7395000.0,71.0,50.0,5.0,,
