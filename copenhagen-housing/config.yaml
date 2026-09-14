@@ -26,11 +26,22 @@ sold_query_params:
 # exactly, but close). Listings are tagged by the first district whose range contains
 # their postcode. Order matters only for display.
 districts:
-  koebenhavn_k:    { label: "København K",     ranges: [[1050, 1473]] }
+  koebenhavn_k:    { label: "København K",     ranges: [[1050, 1499]] }
   vesterbro:       { label: "Vesterbro",       ranges: [[1500, 1799]] }
   frederiksberg_c: { label: "Frederiksberg C", ranges: [[1800, 1999]] }
+  frederiksberg:   { label: "Frederiksberg",   ranges: [[2000, 2000]] }
   oesterbro:       { label: "Østerbro",        ranges: [[2100, 2100]] }
+  nordhavn:        { label: "Nordhavn",        ranges: [[2150, 2150]] }
   noerrebro:       { label: "Nørrebro",        ranges: [[2200, 2200]] }
+  amager:          { label: "Amager (S)",      ranges: [[2300, 2300]] }
+  nordvest:        { label: "Nordvest",        ranges: [[2400, 2400]] }
+  sydhavn:         { label: "Sydhavn (SV)",    ranges: [[2450, 2450]] }
+  valby:           { label: "Valby",           ranges: [[2500, 2500]] }
+
+# Which districts get their own line on the by-district TREND charts (kept small so the
+# charts stay readable). The full set above still tags every listing and fills the
+# going-rates table + Explore filter.
+chart_districts: [koebenhavn_k, vesterbro, frederiksberg_c, oesterbro, noerrebro]
 
 # Property-type segmentation. Codes verified against a live 2026-09-14 snapshot:
 #   3 = ejerlejlighed (apartment) · 1 = villa · 2 = rækkehus (townhouse)
@@ -67,6 +78,14 @@ sold:
 valuation:
   min_comps: 8
   size_tolerance: 0.25       # ±25% living area counts as comparable
+  # Guardrails so the "best value" ranking isn't dominated by data artefacts:
+  # andelsbolig (co-op) listings and errors show nonsense price/m². We only trust a
+  # listing's gap when its price/m² is in a plausible freehold band AND its own
+  # price ÷ size roughly matches the reported price/m². Foreclosures and non-
+  # apartment/house types are excluded from valuation entirely.
+  sane_sqm_min: 18000        # DKK/m² floor (co-op andel prices fall below this)
+  sane_sqm_max: 200000       # DKK/m² ceiling (above = data error / ultra-prime outlier)
+  consistency_tol: 0.20      # reported price/m² must be within ±20% of price ÷ size
 
 paths:
   raw_dir: "data/raw"

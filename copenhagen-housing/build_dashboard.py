@@ -253,7 +253,8 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
         dk = M.district_of(r.get("zip_code"), districts)
         est = M._to_float(r.get("est_sqm"))
         items.append({
-            "d": dk or "", "z": M._to_int(r.get("zip_code")),
+            "d": dk or "other", "z": M._to_int(r.get("zip_code")),
+            "u": M._to_int(r.get("id")),             # Boliga listing id (for the link)
             "s": int(size) if size else None, "r": M._to_int(r.get("rooms")),
             "p": int(price) if price else None, "sp": int(sp),
             "dom": M._to_int(r.get("days_on_market")),
@@ -263,6 +264,7 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
             "g": _num(r.get("gap_pct")),             # asking vs comps, %
             "nc": M._to_int(r.get("n_comps")) or 0,  # number of comps behind the estimate
         })
+    labels["other"] = "Other Copenhagen"
     return {"items": items, "labels": labels}
 
 
@@ -292,12 +294,15 @@ EXPLORE_HTML = """
     <th class="num">vs comps</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="ex-more" class="more"></div>
-  <p class="methodology">“Est/m²” is the median price per m² of comparable <em>sold</em> homes
-  (same district, property type, ±25% size and, where possible, same rooms). “vs comps” is how
-  far the asking price sits above (+) or below (−) that — asking is normally a few % above realised
-  sales, so treat small positives as normal and look for clear negatives. This uses size, rooms and
-  district only; it can't see floor, condition, light or renovation, so it's a sanity range and an
-  outlier flag, <strong>not</strong> a valuation. Low comp counts (shown as “n=”) mean low confidence.</p>
+  <p class="methodology">“Est. sold /m²” is the median price per m² of comparable <em>sold</em> homes
+  (same district, property type, ±25% size and, where possible, same rooms). “vs comps” is how far
+  asking sits above (+) or below (−) that — asking is normally a few % above realised sales, so treat
+  small positives as normal. Co-op (andel) listings, foreclosures and rows with an implausible price/m²
+  are excluded; “n=” flags low comp counts. <strong>Big caveat on the “best value” sort:</strong> the
+  most-negative rows are usually cheap <em>for a reason</em> the model can't see — leasehold land
+  (e.g. Refshaleøen), a bad floor or condition, an odd layout, or a special micro-location. Treat them
+  as “why is this cheap?” candidates to inspect and click through to the listing — <strong>not</strong>
+  verified bargains. A trustworthy undervalued-finder needs per-listing attributes we don't yet scrape.</p>
 </section>
 """
 
@@ -351,7 +356,13 @@ EXPLORE_JS = """
       var gcls = x.g==null? '' : (x.g<=-5?'gap-lo': (x.g>=10?'gap-hi':''));
       var est = x.e? fmtdkk(x.e) : '–';
       var estTitle = x.nc? (' title="'+x.nc+' comps"'):'';
-      return '<tr><td>'+(labels[x.d]||'–')+'</td><td>'+(x.st||'–')+'</td><td class="num">'+
+      var addr = (x.st||'').replace(/</g,'');
+      var gq = encodeURIComponent((x.st||'')+', '+(x.z||'')+' København');
+      var glink = '<a class="glink" target="_blank" rel="noopener" href="https://www.google.com/search?q='+gq+'" title="Search this address">⌕</a>';
+      var stcell = x.u
+        ? '<a target="_blank" rel="noopener" href="https://www.boliga.dk/bolig/'+x.u+'">'+(addr||'listing')+'</a> '+glink
+        : (addr||'–')+' '+glink;
+      return '<tr><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
         (x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+fmtdkk(x.p)+
         '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
         (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
@@ -433,6 +444,9 @@ tbody tr:last-child td{border-bottom:none;}
 .more{color:var(--muted);font-size:12px;margin-top:8px;}
 td.gap-lo{color:#0ca30c;font-weight:600;} td.gap-hi{color:var(--ink2);}
 .lowconf{color:var(--muted);font-size:11px;}
+table a{color:var(--c1);text-decoration:none;} table a:hover{text-decoration:underline;}
+.glink{display:inline-block;margin-left:4px;color:var(--muted);font-size:13px;text-decoration:none;}
+.glink:hover{color:var(--c1);}
 .methodology{color:var(--muted);font-size:12px;line-height:1.5;margin-top:12px;}
 .methodology strong{color:var(--ink2);} .methodology em{font-style:italic;}
 .note{margin-top:32px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);
@@ -441,8 +455,12 @@ border-radius:12px;color:var(--ink2);font-size:13px;} .note strong{color:var(--i
 
 
 def _district_series(rows, cfg, field):
+    keys = cfg.get("chart_districts") or list(cfg["districts"].keys())
     out = []
-    for i, (key, spec) in enumerate(cfg["districts"].items()):
+    for i, key in enumerate(keys):
+        spec = cfg["districts"].get(key)
+        if not spec:
+            continue
         out.append(_series(rows, f"dist:{key}", field, spec["label"], DISTRICT_SLOTS[i % len(DISTRICT_SLOTS)]))
     return out
 
