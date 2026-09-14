@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Copenhagen Housing Monitor</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e;
+  --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --seg-all:#2a78d6; --seg-apartment:#eb6834; --seg-house:#1baf7a;
+  --flow-new:#2a78d6; --flow-del:#eb6834;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7;
+    --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --seg-all:#3987e5; --seg-apartment:#d95926; --seg-house:#199e70;
+    --flow-new:#3987e5; --flow-del:#d95926;
+  }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--plane); color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+.wrap { max-width:1080px; margin:0 auto; padding:32px 20px 64px; }
+header h1 { margin:0 0 4px; font-size:24px; letter-spacing:-.01em; }
+header p { margin:0; color:var(--ink2); max-width:70ch; }
+.asof { color:var(--muted); font-size:13px; margin-top:8px; }
+.kpi-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:14px; margin:28px 0; }
+.kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:16px 18px; }
+.kpi-label { color:var(--ink2); font-size:13px; }
+.kpi-value { font-size:26px; font-weight:600; margin:6px 0 4px; letter-spacing:-.01em; }
+.kpi-value .unit { font-size:14px; font-weight:400; color:var(--muted); margin-left:3px; }
+.delta { font-size:13px; color:var(--ink2); }
+.delta .wow { color:var(--muted); font-size:11px; }
+.grid-charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr));
+  gap:18px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:16px 18px 12px; margin:0; }
+.card figcaption h3 { margin:0; font-size:15px; }
+.card .sub { color:var(--muted); font-size:12px; }
+.chart { width:100%; height:auto; display:block; margin-top:8px; overflow:visible; }
+.grid { stroke:var(--grid); stroke-width:1; }
+.tick { fill:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.tick-y { text-anchor:end; }
+.tick-x { text-anchor:middle; }
+.line { stroke-width:2; }
+.line.seg-all,.dot.seg-all,.dlabel.seg-all { stroke:var(--seg-all); }
+.line.seg-apartment,.dot.seg-apartment,.dlabel.seg-apartment { stroke:var(--seg-apartment); }
+.line.seg-house,.dot.seg-house,.dlabel.seg-house { stroke:var(--seg-house); }
+.dot { stroke-width:1.5; fill:var(--surface); }
+.dlabel { font-size:11px; font-weight:600; stroke:none; }
+.dlabel.seg-all { fill:var(--seg-all); }
+.dlabel.seg-apartment { fill:var(--seg-apartment); }
+.dlabel.seg-house { fill:var(--seg-house); }
+.flow-new { fill:var(--flow-new); }
+.flow-del { fill:var(--flow-del); }
+.legend { display:flex; gap:18px; font-size:12px; color:var(--ink2); margin-top:6px; }
+.legend .sw { display:inline-block; width:11px; height:11px; border-radius:3px;
+  margin-right:5px; vertical-align:-1px; }
+.legend .sw.flow-new { background:var(--flow-new); }
+.legend .sw.flow-del { background:var(--flow-del); }
+.empty { color:var(--muted); font-size:13px; padding:24px 0; }
+.note { margin-top:32px; padding:16px 18px; background:var(--surface);
+  border:1px solid var(--border); border-radius:12px; color:var(--ink2); font-size:13px; }
+.note strong { color:var(--ink); }
+</style></head>
+<body><div class="wrap">
+<header>
+  <h1>Copenhagen Housing Monitor</h1>
+  <p>Live-listing indicators for <strong>Copenhagen + Frederiksberg</strong>, snapshotted weekly
+  from Boliga. Asking-price cuts and days-on-market are <em>leading</em> indicators —
+  they move weeks before realised sale prices.</p>
+  <div class="asof">Generated 2026-09-14 · 0 snapshot(s) · no data yet</div>
+</header>
+<p class="empty">No snapshots recorded yet.</p>
+<div class="grid-charts">
+<figure class="card"><h3>Asking price per m²</h3><p class="empty">No data yet.</p></figure><figure class="card"><h3>Days on market</h3><p class="empty">No data yet.</p></figure><figure class="card"><h3>Listings with a price cut</h3><p class="empty">No data yet.</p></figure><figure class="card"><h3>Active inventory</h3><p class="empty">No data yet.</p></figure><figure class="card"><h3>Weekly flow</h3><p class="empty">No flow data yet (needs 2+ snapshots).</p></figure>
+</div>
+<div class="note">
+  <strong>Read this before trusting a trend.</strong> These are <em>asking</em> prices on
+  live listings, not realised sale prices, and the source (Boliga) is an undocumented
+  scrape that can drift. A single point means nothing — direction only becomes reliable
+  after several weeks of consistent snapshots. Cross-check quarterly against official
+  Finans Danmark / Danmarks Statistik figures before making any decision that matters.
+</div>
+</div></body></html>

@@ -1,0 +1,49 @@
+name: Copenhagen housing snapshot
+
+# Weekly snapshot of Copenhagen live listings -> metrics -> dashboard, committed
+# back to the repo. Runs on GitHub's infra (open egress), so it can reach Boliga
+# even though the dev sandbox cannot.
+
+on:
+  schedule:
+    # Mondays 06:17 UTC (off the :00 mark to avoid the cron stampede).
+    - cron: "17 6 * * 1"
+  workflow_dispatch:      # lets you run it on demand to validate the API config
+
+permissions:
+  contents: write         # needed to commit the snapshot + dashboard back
+
+concurrency:
+  group: copenhagen-housing
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: copenhagen-housing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run snapshot pipeline
+        run: python run.py
+
+      - name: Commit snapshot & dashboard
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data dashboard.html
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Weekly Copenhagen housing snapshot ($(date -u +%Y-%m-%d))"
+            git push
+          fi
