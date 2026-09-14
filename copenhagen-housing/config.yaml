@@ -87,6 +87,21 @@ valuation:
   sane_sqm_max: 200000       # DKK/m² ceiling (above = data error / ultra-prime outlier)
   consistency_tol: 0.20      # reported price/m² must be within ±20% of price ÷ size
 
+# Per-listing detail enrichment (for the undervalued finder). Each listing is fetched
+# at most once, ever (cached), capped per run, undervalued candidates first.
+detail:
+  enabled: true
+  # Undocumented endpoint — candidates tried in order. The first run logs the real
+  # response shape (search the run log for "DETAIL SAMPLE"); adjust if all fail.
+  endpoints:
+    - "https://api.boliga.dk/api/v2/estate/{id}"
+    - "https://api.boliga.dk/api/v2/property/{id}"
+    - "https://api.boliga.dk/api/v2/estates/{id}"
+    - "https://api.boliga.dk/api/v1/estate/{id}"
+  max_per_run: 30            # discovery cap; raise once the endpoint is confirmed
+  sleep_between_requests_sec: 0.8
+  cache: "data/details.csv.gz"
+
 paths:
   raw_dir: "data/raw"
   sold_raw_dir: "data/sold_raw"

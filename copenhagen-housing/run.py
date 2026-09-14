@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 
 import build_dashboard
+import detail_scraper
 import metrics as metrics_mod
 import scraper
 import valuation
@@ -105,6 +106,17 @@ def main() -> int:
 
     # 3. valuation — expected sale value per active listing from sold comps (in place)
     valuation.estimate(active, sold, cfg)
+
+    # 3b. detail enrichment — fetch per-listing attributes (capped, cached, candidates
+    #     first). Best-effort: failures never break the run.
+    if not args.dry_run and cfg.get("detail", {}).get("enabled"):
+        try:
+            priority = [r["id"] for r in sorted(
+                active, key=lambda r: r["gap_pct"] if r.get("gap_pct") is not None else 1e9)
+                if r.get("id") not in (None, "")]
+            detail_scraper.enrich(active, cfg, PROJECT_DIR, priority)
+        except Exception as err:  # noqa: BLE001
+            log.warning("detail enrichment failed (%s) — continuing", err)
 
     # 4. dashboard (trend view from the time series + explore view from latest snapshot)
     all_metrics = build_dashboard.load_metrics(metrics_csv)
