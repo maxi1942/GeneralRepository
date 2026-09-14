@@ -214,6 +214,7 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
         if not sp or sp <= 0:
             continue
         dk = M.district_of(r.get("zip_code"), districts)
+        est = M._to_float(r.get("est_sqm"))
         items.append({
             "d": dk or "", "z": M._to_int(r.get("zip_code")),
             "s": int(size) if size else None, "r": M._to_int(r.get("rooms")),
@@ -221,6 +222,9 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
             "dom": M._to_int(r.get("days_on_market")),
             "cut": _num(r.get("price_change_pct")) or 0,
             "st": (r.get("street") or "").strip(),
+            "e": int(est) if est else None,          # comps-based expected sold DKK/m²
+            "g": _num(r.get("gap_pct")),             # asking vs comps, %
+            "nc": M._to_int(r.get("n_comps")) or 0,  # number of comps behind the estimate
         })
     return {"items": items, "labels": labels}
 
@@ -237,13 +241,26 @@ EXPLORE_HTML = """
     <label>Min m²<input id="f-smin" type="number" min="0" step="5" placeholder="any"></label>
     <label>Max m²<input id="f-smax" type="number" min="0" step="5" placeholder="any"></label>
     <label class="grow">Street contains<input id="f-street" type="text" placeholder="e.g. Istedgade"></label>
+    <label>Sort by<select id="f-sort">
+      <option value="value">Best value (asking vs comps)</option>
+      <option value="sp-desc">DKK/m² (high → low)</option>
+      <option value="sp-asc">DKK/m² (low → high)</option>
+      <option value="dom-desc">Longest on market</option>
+    </select></label>
   </div>
   <div id="ex-stats" class="kpi-row explore-stats"></div>
   <div class="table-wrap"><table id="ex-table"><thead><tr>
     <th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
-    <th class="num">Price</th><th class="num">DKK/m²</th><th class="num">Days</th><th class="num">Cut</th>
+    <th class="num">Price</th><th class="num">DKK/m²</th><th class="num">Est/m²</th>
+    <th class="num">vs comps</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="ex-more" class="more"></div>
+  <p class="methodology">“Est/m²” is the median price per m² of comparable <em>sold</em> homes
+  (same district, property type, ±25% size and, where possible, same rooms). “vs comps” is how
+  far the asking price sits above (+) or below (−) that — asking is normally a few % above realised
+  sales, so treat small positives as normal and look for clear negatives. This uses size, rooms and
+  district only; it can't see floor, condition, light or renovation, so it's a sanity range and an
+  outlier flag, <strong>not</strong> a valuation. Low comp counts (shown as “n=”) mean low confidence.</p>
 </section>
 """
 
@@ -278,23 +295,36 @@ EXPLORE_JS = """
         pr=f.filter(function(x){return x.p;}).map(function(x){return x.p;}),
         dom=f.filter(function(x){return x.dom!=null;}).map(function(x){return x.dom;}),
         cut=f.filter(function(x){return x.cut<0;}).length;
+    var gaps=f.filter(function(x){return x.g!=null;}).map(function(x){return x.g;});
     $('ex-stats').innerHTML =
       tile('Matches', f.length.toLocaleString('da-DK'),'') +
       tile('Median price', fmtdkk(median(pr)),' DKK') +
       tile('Median DKK/m²', fmtdkk(median(sp)),'') +
-      tile('Median days', median(dom)==null?'–':Math.round(median(dom)),' days') +
-      tile('With a price cut', f.length? Math.round(100*cut/f.length)+'%':'–','');
-    var rows=f.slice().sort(function(a,b){return b.sp-a.sp;});
+      tile('Median vs comps', gaps.length? (median(gaps)>0?'+':'')+median(gaps).toFixed(1)+'%':'–','') +
+      tile('Median days', median(dom)==null?'–':Math.round(median(dom)),' days');
+    var sort=$('f-sort').value;
+    var rows=f.slice();
+    var BIG=1e12;
+    if(sort==='value') rows.sort(function(a,b){return (a.g==null?BIG:a.g)-(b.g==null?BIG:b.g);});
+    else if(sort==='sp-asc') rows.sort(function(a,b){return a.sp-b.sp;});
+    else if(sort==='dom-desc') rows.sort(function(a,b){return (b.dom||0)-(a.dom||0);});
+    else rows.sort(function(a,b){return b.sp-a.sp;});
     var top=rows.slice(0,60).map(function(x){
+      var gap = x.g==null? '–' : (x.g>0?'+':'')+x.g.toFixed(1)+'%';
+      var gcls = x.g==null? '' : (x.g<=-5?'gap-lo': (x.g>=10?'gap-hi':''));
+      var est = x.e? fmtdkk(x.e) : '–';
+      var estTitle = x.nc? (' title="'+x.nc+' comps"'):'';
       return '<tr><td>'+(labels[x.d]||'–')+'</td><td>'+(x.st||'–')+'</td><td class="num">'+
         (x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+fmtdkk(x.p)+
-        '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num">'+(x.dom==null?'–':x.dom)+
+        '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
+        (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
+        '</td><td class="num '+gcls+'">'+gap+'</td><td class="num">'+(x.dom==null?'–':x.dom)+
         '</td><td class="num">'+(x.cut<0? x.cut.toFixed(0)+'%':'–')+'</td></tr>';
     }).join('');
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
-    $('ex-more').textContent = rows.length>60? ('Showing top 60 of '+rows.length+' by DKK/m².'):'';
+    $('ex-more').textContent = rows.length>60? ('Showing top 60 of '+rows.length+'.'):'';
   }
-  ['f-dist','f-rooms','f-smin','f-smax','f-street'].forEach(function(id){
+  ['f-dist','f-rooms','f-smin','f-smax','f-street','f-sort'].forEach(function(id){
     $(id).addEventListener('input',apply);
   });
   apply();
@@ -360,6 +390,10 @@ th{color:var(--ink2);font-weight:600;position:sticky;top:0;background:var(--surf
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}
 tbody tr:last-child td{border-bottom:none;}
 .more{color:var(--muted);font-size:12px;margin-top:8px;}
+td.gap-lo{color:#0ca30c;font-weight:600;} td.gap-hi{color:var(--ink2);}
+.lowconf{color:var(--muted);font-size:11px;}
+.methodology{color:var(--muted);font-size:12px;line-height:1.5;margin-top:12px;}
+.methodology strong{color:var(--ink2);} .methodology em{font-style:italic;}
 .note{margin-top:32px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);
 border-radius:12px;color:var(--ink2);font-size:13px;} .note strong{color:var(--ink);}
 """

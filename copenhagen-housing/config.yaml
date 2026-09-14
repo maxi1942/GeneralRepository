@@ -49,10 +49,24 @@ scraper:
 
 sold:
   base_url: "https://api.boliga.dk/api/v2/sold/search/results"
-  lookback_days: 90          # trailing window used for sold stats + months-of-supply
+  lookback_days: 180         # how far back to fetch sold records (for price trend + comps)
   page_size: 100
-  max_pages: 200
+  max_pages: 300
   enabled: true              # set false to skip the sold fetch entirely
+  # Months-of-supply is biased HIGH if it counts recent sales, because the land
+  # registry lags: the last few weeks of sales aren't registered yet, so a
+  # trailing-to-today window undercounts sales and overstates supply. So the sales
+  # RATE is measured over a window that ends `rate_lag_days` ago (fully registered)
+  # and spans `rate_window_days`.
+  rate_lag_days: 42          # skip the most recent ~6 weeks (incomplete registration)
+  rate_window_days: 90       # measure the sales rate over this fully-registered span
+
+# Valuation model (#2): estimate each active listing's expected SALE value from
+# comparable *sold* records, then compare to its asking price. Comps are found by
+# relaxing filters until at least `min_comps` are found.
+valuation:
+  min_comps: 8
+  size_tolerance: 0.25       # ±25% living area counts as comparable
 
 paths:
   raw_dir: "data/raw"

@@ -22,6 +22,7 @@ import yaml
 import build_dashboard
 import metrics as metrics_mod
 import scraper
+import valuation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("boliga.run")
@@ -102,7 +103,10 @@ def main() -> int:
     metrics_csv = PROJECT_DIR / cfg["paths"]["metrics_csv"]
     metrics_mod.append_metrics(metric_rows, metrics_csv, today)
 
-    # 3. dashboard (trend view from the time series + explore view from latest snapshot)
+    # 3. valuation — expected sale value per active listing from sold comps (in place)
+    valuation.estimate(active, sold, cfg)
+
+    # 4. dashboard (trend view from the time series + explore view from latest snapshot)
     all_metrics = build_dashboard.load_metrics(metrics_csv)
     build_dashboard.write_dashboard(all_metrics, active, cfg,
                                     PROJECT_DIR / cfg["paths"]["dashboard_html"], today)

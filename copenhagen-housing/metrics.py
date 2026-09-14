@@ -20,7 +20,7 @@ import csv
 import gzip
 import logging
 import statistics
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -118,20 +118,44 @@ def _active_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _parse_date(v: Any) -> date | None:
+    if not v:
+        return None
+    s = str(v)[:10]
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
 def _sold_metrics(rows: list[dict[str, Any]], n_active: int,
-                  lookback_days: int) -> dict[str, Any]:
+                  cfg: dict[str, Any], today: date) -> dict[str, Any]:
     sqm = [v for r in rows if (v := _to_float(r.get("sqm_price"))) and v > 0]
     # realised discount: Boliga's `change` is negative when sold below original ask
     discounts = [abs(v) for r in rows
                  if (v := _to_float(r.get("change_pct"))) is not None and v < 0]
-    n_sold = len(rows)
+
+    # Sales RATE over a fully-registered window (ends rate_lag_days ago) to avoid the
+    # registry-lag undercount that would inflate months-of-supply. See config comments.
+    sold = cfg["sold"]
+    rate_end = today - timedelta(days=sold["rate_lag_days"])
+    rate_start = rate_end - timedelta(days=sold["rate_window_days"])
+    in_window = 0
+    dated = 0
+    for r in rows:
+        d = _parse_date(r.get("sold_date"))
+        if d is not None:
+            dated += 1
+            if rate_start < d <= rate_end:
+                in_window += 1
+
     months_supply = None
-    if n_sold > 0:
-        monthly_rate = n_sold / (lookback_days / 30.0)
-        if monthly_rate > 0:
-            months_supply = round(n_active / monthly_rate, 1)
+    # only trust the rate if sold records actually carry dates
+    if dated > 0 and in_window > 0:
+        monthly_rate = in_window / (sold["rate_window_days"] / 30.0)
+        months_supply = round(n_active / monthly_rate, 1)
     return {
-        "sold_count": n_sold,
+        "sold_count": len(rows),
         "median_sold_sqm_price": _median(sqm),
         "median_sold_discount_pct": _median(discounts),
         "months_of_supply": months_supply,
@@ -142,7 +166,6 @@ def compute_metrics(active: list[dict[str, Any]], sold: list[dict[str, Any]],
                     cfg: dict[str, Any], prev_ids: set[str] | None,
                     snapshot_date: date) -> list[dict[str, Any]]:
     segments = build_segments(cfg)
-    lookback = cfg["sold"]["lookback_days"]
 
     cur_ids = {str(r.get("id")) for r in active if r.get("id") not in (None, "")}
     if prev_ids is None:
@@ -159,7 +182,7 @@ def compute_metrics(active: list[dict[str, Any]], sold: list[dict[str, Any]],
             continue
         m = {k: None for k in METRIC_FIELDS}
         m.update(_active_metrics(act))
-        m.update(_sold_metrics(sld, len(act), lookback))
+        m.update(_sold_metrics(sld, len(act), cfg, snapshot_date))
         m["snapshot_date"] = snapshot_date.isoformat()
         m["segment"] = seg
         if seg == "all":
