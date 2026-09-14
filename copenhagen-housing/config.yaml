@@ -25,14 +25,17 @@ query_params:
   zipcodeFrom: 1000
   zipcodeTo: 2500
   # Leave propertyType blank to fetch all types; we segment by type afterwards.
-  # propertyType: 2   # 1=villa, 2=apartment(ejerlejlighed), 3=townhouse, 4=holiday
+  # propertyType: 3   # 1=villa, 2=townhouse, 3=apartment(ejerlejlighed), 4=holiday
 
 # Property-type segmentation for metrics. Boliga integer codes -> our buckets.
+# Codes verified against a live 2026-09-14 Copenhagen snapshot (2,159 listings):
+#   3 = ejerlejlighed (apartment) — dominant in Copenhagen
+#   1 = villa, 2 = rækkehus (townhouse)
+#   9 = villa-apartment / co-op-like, 4 = holiday, 5/6 = land, 11 = andel — all noise here
 # Anything not listed falls into "other".
 property_type_buckets:
-  apartment: [2]          # ejerlejlighed — dominates Copenhagen
-  house: [1, 3]           # villa + rækkehus/townhouse
-  # (4=holiday home, 6=land, etc. -> "other")
+  apartment: [3]          # ejerlejlighed — dominates Copenhagen
+  house: [1, 2]           # villa + rækkehus/townhouse
 
 # Scraper behaviour
 scraper:
