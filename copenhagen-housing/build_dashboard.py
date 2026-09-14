@@ -178,8 +178,8 @@ def kpi_tiles(rows) -> str:
         return '<p class="empty">No snapshots recorded yet.</p>'
     cur, prev = allrows[-1], (allrows[-2] if len(allrows) > 1 else None)
     specs = [
-        ("Median asking price", "median_sqm_price", "dkk", " DKK/m²"),
-        ("Median sold price", "median_sold_sqm_price", "dkk", " DKK/m²"),
+        ("Median asking (live)", "median_sqm_price", "dkk", " DKK/m²"),
+        ("Median sold (realised)", "median_sold_sqm_price", "dkk", " DKK/m²"),
         ("Months of supply", "months_of_supply", "months", " mo"),
         ("Median days on market", "median_days_on_market", "days", " days"),
         ("Listings with a price cut", "pct_price_cut", "pct", ""),
@@ -199,6 +199,43 @@ def kpi_tiles(rows) -> str:
         tiles.append(f'<div class="kpi"><div class="kpi-label">{html.escape(label)}</div>'
                      f'<div class="kpi-value">{_fmt(cv, kind)}<span class="unit">{unit}</span></div>{delta}</div>')
     return f'<div class="kpi-row">{"".join(tiles)}</div>'
+
+
+def going_rates_table(rows, cfg) -> str:
+    """Per-neighbourhood 'going rate' table — realised SOLD prices first, then asking."""
+    if not rows:
+        return ""
+    latest = max(r["snapshot_date"] for r in rows)
+    by_seg = {r["segment"]: r for r in rows if r["snapshot_date"] == latest}
+
+    order = [("all", "All Copenhagen")] + [(f"dist:{k}", v["label"]) for k, v in cfg["districts"].items()]
+    body = []
+    for seg, label in order:
+        r = by_seg.get(seg)
+        if not r:
+            continue
+        sold = _num(r.get("median_sold_sqm_price"))
+        ask = _num(r.get("median_sqm_price"))
+        gap = None
+        if sold and ask:
+            gap = (ask - sold) / sold * 100
+        n = _num(r.get("sold_count"))
+        mos = _num(r.get("months_of_supply"))
+        body.append(
+            f'<tr><td>{html.escape(label)}</td>'
+            f'<td class="num strong">{_fmt(sold, "dkk")}</td>'
+            f'<td class="num">{_fmt(ask, "dkk")}</td>'
+            f'<td class="num">{("+" if gap and gap>0 else "")+format(gap, ".1f")+"%" if gap is not None else "–"}</td>'
+            f'<td class="num">{int(n) if n else "–"}</td>'
+            f'<td class="num">{_fmt(mos, "months") if mos is not None else "–"}</td></tr>')
+    return (
+        '<figure class="card wide"><figcaption><h3>Going rates by neighbourhood</h3>'
+        '<span class="sub">Realised <strong>sold</strong> price/m² is the going rate; asking is what sellers '
+        'currently want. Sold lags ~1–3 months.</span></figcaption>'
+        '<div class="table-wrap"><table><thead><tr>'
+        '<th>Neighbourhood</th><th class="num">Sold /m² (realised)</th><th class="num">Asking /m² (live)</th>'
+        '<th class="num">Asking vs sold</th><th class="num">Recent sales</th><th class="num">Months supply</th>'
+        f'</tr></thead><tbody>{"".join(body)}</tbody></table></div></figure>')
 
 
 # --------------------------------------------------------------------------- #
@@ -251,7 +288,7 @@ EXPLORE_HTML = """
   <div id="ex-stats" class="kpi-row explore-stats"></div>
   <div class="table-wrap"><table id="ex-table"><thead><tr>
     <th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
-    <th class="num">Price</th><th class="num">DKK/m²</th><th class="num">Est/m²</th>
+    <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
     <th class="num">vs comps</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="ex-more" class="more"></div>
@@ -359,6 +396,10 @@ margin:36px 0 14px;border-top:1px solid var(--border);padding-top:22px;}
 .kpi-value .unit{font-size:13px;font-weight:400;color:var(--muted);margin-left:3px;}
 .delta{font-size:13px;color:var(--ink2);} .delta .wow{color:var(--muted);font-size:11px;}
 .grid-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;}
+.callout{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--c1);
+border-radius:10px;padding:12px 16px;margin:20px 0;font-size:13px;color:var(--ink2);line-height:1.55;}
+.callout strong{color:var(--ink);} .callout b{color:var(--ink);font-weight:600;}
+.card.wide{margin:0 0 18px;} td.strong{font-weight:600;color:var(--ink);}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px 12px;margin:0;}
 .card figcaption h3{margin:0;font-size:15px;} .card .sub{color:var(--muted);font-size:12px;}
 .chart{width:100%;height:auto;display:block;margin-top:8px;overflow:visible;}
@@ -411,8 +452,10 @@ def build_html(rows, active, cfg, generated) -> str:
     trend = [
         line_chart("Asking price per m²", "Median DKK, by property type",
                    ptype_series, "dkk", "price"),
-        line_chart("Asking price per m² by district", "Median DKK — where the divergence is",
+        line_chart("Asking price per m² by district", "Median DKK — what sellers want, by area",
                    _district_series(rows, cfg, "median_sqm_price"), "dkk", "price-dist"),
+        line_chart("Sold price per m² by district", "Median DKK — realised going rate, by area",
+                   _district_series(rows, cfg, "median_sold_sqm_price"), "dkk", "sold-dist"),
         line_chart("Asking vs. realised sold price per m²", "Median DKK — sold lags ~1-3 months",
                    [_series(rows, "all", "median_sqm_price", "Asking", "c1"),
                     _series(rows, "all", "median_sold_sqm_price", "Sold", "c2")], "dkk", "asksold"),
@@ -447,6 +490,12 @@ from Boliga. Asking prices, cuts and days-on-market are <em>leading</em> indicat
 sold prices are the lagging ground truth.</p>
 <div class="asof">Generated {generated.isoformat()} · {len(snaps)} snapshot(s) · {span}</div></header>
 {kpi_tiles(rows)}
+<div class="callout"><strong>Asking vs. sold — the key distinction.</strong>
+<b>Asking</b> = what sellers list live listings at (leading, updates weekly).
+<b>Sold (realised)</b> = what homes actually changed hands for, from the land registry
+(lagging ~1–3 months). Asking normally sits a few % above sold. For "going rates in a
+neighbourhood", read the <b>sold</b> column.</div>
+{going_rates_table(rows, cfg)}
 <h2 class="section">Market direction (weekly trend)</h2>
 <div class="grid-charts">{''.join(trend)}</div>
 <h2 class="section">Explore the current market</h2>
