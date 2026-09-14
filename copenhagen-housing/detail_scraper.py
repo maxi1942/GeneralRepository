@@ -123,11 +123,29 @@ def enrich(active: list[dict], cfg: dict, project_dir: Path,
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
     endpoints = dcfg["endpoints"]
+    # Detail-specific network settings: short timeout, few retries — detail is
+    # best-effort and must never hang the run.
+    timeout = dcfg.get("request_timeout_sec", 12)
+    retries = dcfg.get("max_retries", 1)
+    budget = dcfg.get("time_budget_sec", 180)
+    abort_n = dcfg.get("abort_after_consecutive_failures", 12)
+    start = time.monotonic()
     fetched = 0
+    consecutive_fail = 0
     logged_sample = False
-    for rid in todo:
-        raw, ep = fetch_detail(session, rid, endpoints, cfg["scraper"]["request_timeout_sec"],
-                               cfg["scraper"]["max_retries"])
+    for i, rid in enumerate(todo):
+        if time.monotonic() - start > budget:
+            log.info("detail: time budget (%ds) reached after %d attempts — stopping early", budget, i)
+            break
+        if consecutive_fail >= abort_n:
+            log.warning("detail: %d consecutive failures — likely rate-limited; stopping "
+                        "(will resume next run)", consecutive_fail)
+            break
+        raw, ep = fetch_detail(session, rid, endpoints, timeout, retries)
+        if raw is None:
+            consecutive_fail += 1
+        else:
+            consecutive_fail = 0
         if raw is not None:
             cache[rid] = {"fetched_date": date.today().isoformat(), "endpoint": ep, "raw": raw}
             fetched += 1

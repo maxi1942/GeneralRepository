@@ -98,8 +98,12 @@ detail:
     - "https://api.boliga.dk/api/v2/property/{id}"
     - "https://api.boliga.dk/api/v2/estates/{id}"
     - "https://api.boliga.dk/api/v1/estate/{id}"
-  max_per_run: 250           # endpoint confirmed (api/v2/estate/{id}); candidates first
+  max_per_run: 150           # endpoint confirmed (api/v2/estate/{id}); candidates first
   sleep_between_requests_sec: 0.8
+  request_timeout_sec: 12    # detail is best-effort — short timeout, few retries
+  max_retries: 1
+  time_budget_sec: 180       # hard cap on total detail-fetch time per run
+  abort_after_consecutive_failures: 12   # bail if rate-limited; resume next run
   cache: "data/details.csv.gz"
 
 paths:
