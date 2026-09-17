@@ -71,6 +71,11 @@ sold:
   # and spans `rate_window_days`.
   rate_lag_days: 42          # skip the most recent ~6 weeks (incomplete registration)
   rate_window_days: 90       # measure the sales rate over this fully-registered span
+  # Sold is best-effort (secondary to the live feed): short timeout, few retries, and a
+  # hard time budget so a throttled Boliga can't drag the run. Partial data is fine.
+  request_timeout_sec: 15
+  max_retries: 2
+  time_budget_sec: 120
 
 # Valuation model (#2): estimate each active listing's expected SALE value from
 # comparable *sold* records, then compare to its asking price. Comps are found by

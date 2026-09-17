@@ -125,7 +125,8 @@ def _get(session: requests.Session, url: str, params: dict[str, Any],
 def _paged_fetch(base_url: str, base_query: dict[str, Any], page_size: int,
                  max_pages: int, timeout: int, sleep_s: float, max_retries: int,
                  candidates: dict[str, list[str]], label: str,
-                 dedupe_key: str | None) -> list[dict[str, Any]]:
+                 dedupe_key: str | None, time_budget: float | None = None,
+                 soft_fail: bool = False) -> list[dict[str, Any]]:
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
 
@@ -133,10 +134,22 @@ def _paged_fetch(base_url: str, base_query: dict[str, Any], page_size: int,
     seen: set[Any] = set()
     page = 1
     total: int | None = None
+    start = time.monotonic()
 
     while page <= max_pages:
+        if time_budget is not None and time.monotonic() - start > time_budget:
+            log.warning("%s: time budget (%ss) reached at page %d — returning %d partial rows",
+                        label, time_budget, page, len(rows))
+            break
         params = {**base_query, "pageSize": page_size, "page": page}
-        payload = _get(session, base_url, params, timeout, max_retries)
+        try:
+            payload = _get(session, base_url, params, timeout, max_retries)
+        except Exception as err:  # noqa: BLE001
+            if soft_fail:
+                log.warning("%s: page %d failed (%s) — returning %d partial rows",
+                            label, page, err, len(rows))
+                break
+            raise
         results = _extract_results(payload)
         if page == 1:
             total = _total_count(payload)
@@ -182,11 +195,15 @@ def fetch_sold(cfg: dict[str, Any], today: date | None = None) -> list[dict[str,
         "salesDateMin": since,
         "salesDateMax": today.isoformat(),
     }
+    scr = cfg["scraper"]
     return _paged_fetch(
         sold["base_url"], base_query,
-        sold["page_size"], sold["max_pages"], cfg["scraper"]["request_timeout_sec"],
-        cfg["scraper"]["sleep_between_requests_sec"], cfg["scraper"]["max_retries"],
-        SOLD_FIELD_CANDIDATES, "sold", dedupe_key=None)
+        sold["page_size"], sold["max_pages"],
+        sold.get("request_timeout_sec", scr["request_timeout_sec"]),
+        scr["sleep_between_requests_sec"],
+        sold.get("max_retries", 2),
+        SOLD_FIELD_CANDIDATES, "sold", dedupe_key=None,
+        time_budget=sold.get("time_budget_sec", 120), soft_fail=True)
 
 
 def save_snapshot(rows: list[dict[str, Any]], out_dir: Path, fieldnames: list[str],
