@@ -277,8 +277,9 @@ EXPLORE_HTML = """
 <section class="explore card">
   <figcaption><h3>Explore current listings</h3>
   <span class="sub">Live filter over the latest snapshot — a point-in-time view, not a trend.</span></figcaption>
+  <div class="areas"><span class="areas-lbl">Areas</span>
+    <div id="f-dist-chips" class="chips"></div></div>
   <div class="filters">
-    <label>District<select id="f-dist"><option value="">All</option></select></label>
     <label>Rooms<select id="f-rooms">
       <option value="">Any</option><option>1</option><option>2</option><option>3</option>
       <option>4</option><option value="5+">5+</option></select></label>
@@ -323,22 +324,34 @@ EXPLORE_JS = """
   var DATA = window.__EXPLORE__ || {items:[],labels:{}};
   var items = DATA.items, labels = DATA.labels;
   var $ = function(id){return document.getElementById(id);};
-  var dsel = $('f-dist');
+  var sel = new Set();               // selected districts; empty = all
+  var wrap = $('f-dist-chips');
+  var allChip = document.createElement('button');
+  allChip.className='chip all on'; allChip.textContent='All areas';
+  allChip.onclick=function(){ sel.clear(); syncChips(); apply(); };
+  wrap.appendChild(allChip);
+  var chipEls={};
   Object.keys(labels).forEach(function(k){
-    var o=document.createElement('option'); o.value=k; o.textContent=labels[k]; dsel.appendChild(o);
+    var c=document.createElement('button'); c.className='chip'; c.textContent=labels[k];
+    c.onclick=function(){ if(sel.has(k)) sel.delete(k); else sel.add(k); syncChips(); apply(); };
+    chipEls[k]=c; wrap.appendChild(c);
   });
+  function syncChips(){
+    allChip.classList.toggle('on', sel.size===0);
+    Object.keys(chipEls).forEach(function(k){ chipEls[k].classList.toggle('on', sel.has(k)); });
+  }
   function median(a){ if(!a.length) return null; a=a.slice().sort(function(x,y){return x-y;});
     var m=Math.floor(a.length/2); return a.length%2? a[m] : (a[m-1]+a[m])/2; }
   function fmtdkk(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
   function tile(label,val,unit){ return '<div class="kpi"><div class="kpi-label">'+label+
     '</div><div class="kpi-value">'+val+'<span class="unit">'+(unit||'')+'</span></div></div>'; }
   function apply(){
-    var d=$('f-dist').value, rm=$('f-rooms').value,
+    var rm=$('f-rooms').value,
         smin=parseFloat($('f-smin').value), smax=parseFloat($('f-smax').value),
         st=$('f-street').value.trim().toLowerCase(),
         en=$('f-energy').value, clean=$('f-clean').checked;
     var f=items.filter(function(x){
-      if(d && x.d!==d) return false;
+      if(sel.size && !sel.has(x.d)) return false;
       if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
       if(!isNaN(smin) && (x.s==null||x.s<smin)) return false;
       if(!isNaN(smax) && (x.s==null||x.s>smax)) return false;
@@ -393,7 +406,7 @@ EXPLORE_JS = """
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
     $('ex-more').textContent = rows.length>60? ('Showing top 60 of '+rows.length+'.'):'';
   }
-  ['f-dist','f-rooms','f-smin','f-smax','f-street','f-sort'].forEach(function(id){
+  ['f-rooms','f-smin','f-smax','f-street','f-sort','f-energy','f-clean'].forEach(function(id){
     $(id).addEventListener('input',apply);
   });
   apply();
@@ -450,7 +463,13 @@ border-radius:10px;padding:12px 16px;margin:20px 0;font-size:13px;color:var(--in
 .legend .sw.s-c1{background:var(--c1);} .legend .sw.s-c2{background:var(--c2);}
 .empty{color:var(--muted);font-size:13px;padding:24px 0;}
 .explore{margin-top:16px;}
-.filters{display:flex;gap:14px;flex-wrap:wrap;margin:14px 0 4px;}
+.areas{margin:14px 0 4px;} .areas-lbl{font-size:12px;color:var(--ink2);display:block;margin-bottom:6px;}
+.chips{display:flex;flex-wrap:wrap;gap:6px;}
+.chip{border:1px solid var(--border);background:var(--plane);color:var(--ink2);border-radius:999px;
+padding:5px 12px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.2;}
+.chip:hover{border-color:var(--c1);} .chip.on{background:var(--c1);border-color:var(--c1);color:#fff;}
+.chip.all{font-weight:600;}
+.filters{display:flex;gap:14px;flex-wrap:wrap;margin:6px 0 4px;}
 .filters label{display:flex;flex-direction:column;font-size:12px;color:var(--ink2);gap:4px;}
 .filters .grow{flex:1;min-width:180px;}
 .filters select,.filters input{font:14px system-ui;padding:7px 9px;border:1px solid var(--border);
