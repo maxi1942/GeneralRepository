@@ -22,7 +22,7 @@ import metrics as M
 log = logging.getLogger("boliga.soldhist")
 
 FIELDS = ["street", "zip_code", "size_m2", "rooms", "price", "sqm_price",
-          "change_pct", "property_type", "sold_date"]
+          "change_pct", "property_type", "sold_date", "id", "estate_url"]
 MAX_AGE_DAYS = 400   # ignore records dated older than this or in the future
 
 
@@ -70,6 +70,13 @@ def merge(history: dict[str, dict], sold: list[dict], today: date | None = None)
         if k not in history:
             history[k] = rec
             added += 1
+        else:
+            # backfill fields that became available later (e.g. a listing id / url
+            # for the photos link) onto an already-archived record
+            existing = history[k]
+            for f in ("id", "estate_url"):
+                if not existing.get(f) and rec.get(f):
+                    existing[f] = rec[f]
     log.info("sold history: +%d new records, %d total", added, len(history))
     return added
 

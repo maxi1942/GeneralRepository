@@ -533,6 +533,7 @@ def sold_payload(sold_hist, cfg) -> dict:
         if not sp or not price:
             continue
         ch = _num(r.get("change_pct"))
+        bid = M._to_int(r.get("id"))
         items.append({
             "d": M.district_of(r.get("zip_code"), districts) or "other",
             "z": M._to_int(r.get("zip_code")), "s": M._to_int(r.get("size_m2")),
@@ -540,6 +541,8 @@ def sold_payload(sold_hist, cfg) -> dict:
             "ch": round(ch, 1) if (ch is not None and ch < 0) else None,
             "dt": (r.get("sold_date") or "")[:10], "st": (r.get("street") or "").strip(),
             "pt": bucket(r.get("property_type")),
+            "u": bid if (bid and bid > 0) else None,     # Boliga property id (has photos)
+            "au": r.get("estate_url") or None,           # agent listing url
         })
     labels["other"] = "Other Copenhagen"
     return {"items": items, "labels": labels}
@@ -625,7 +628,11 @@ SOLD_JS = """
     var top=f.slice(0,80).map(function(x){
       var addr=(x.st||'').replace(/</g,'');
       var gq=encodeURIComponent((x.st||'')+', '+(x.z||'')+' København');
-      var a='<a target="_blank" rel="noopener" href="https://www.google.com/search?q='+gq+'">'+(addr||'–')+'</a>';
+      var glink='https://www.google.com/search?q='+gq;
+      var direct = x.au ? x.au : (x.u ? 'https://www.boliga.dk/bolig/'+x.u : null);
+      var a = direct
+        ? '<a target="_blank" rel="noopener" href="'+direct+'" title="Listing with photos">📷 '+(addr||'listing')+'</a>'
+        : '<a target="_blank" rel="noopener" href="'+glink+'" title="Search this address">'+(addr||'–')+'</a>';
       return '<tr><td>'+(x.dt||'–')+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+a+
         '</td><td class="num">'+(x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+
         fmt(x.p)+'</td><td class="num">'+fmt(x.sp)+'</td><td class="num">'+(x.ch!=null? x.ch.toFixed(1)+'%':'–')+'</td></tr>';

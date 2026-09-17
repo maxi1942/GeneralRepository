@@ -48,6 +48,8 @@ FIELD_CANDIDATES: dict[str, list[str]] = {
 
 # Sold-record fields.
 SOLD_FIELD_CANDIDATES: dict[str, list[str]] = {
+    "id": ["estateId", "id", "guid"],                 # Boliga property id, if the sale was ever listed
+    "estate_url": ["estateUrl", "url"],               # agent listing url, if present
     "price": ["price", "amount", "soldPrice"],
     "sqm_price": ["squaremeterPrice", "sqmPrice", "squareMeterPrice"],
     "size_m2": ["size", "livingArea", "area"],
