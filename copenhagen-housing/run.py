@@ -24,6 +24,7 @@ import build_dashboard
 import detail_scraper
 import metrics as metrics_mod
 import scraper
+import sold_history
 import valuation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -98,6 +99,13 @@ def main() -> int:
         scraper.save_snapshot(sold, PROJECT_DIR / cfg["paths"]["sold_raw_dir"],
                               list(scraper.SOLD_FIELD_CANDIDATES.keys()), today)
 
+    # accumulate a permanent, de-duplicated archive of actual sold apartments
+    hist_path = PROJECT_DIR / cfg["paths"]["sold_history"]
+    history = sold_history.load(hist_path)
+    if sold:
+        sold_history.merge(history, sold, today)
+        sold_history.save(history, hist_path)
+
     # 2. metrics
     raw_dir = PROJECT_DIR / cfg["paths"]["raw_dir"]
     prev_ids = metrics_mod.previous_snapshot_ids(raw_dir, today)
@@ -126,7 +134,7 @@ def main() -> int:
 
     # 4. dashboard (trend view from the time series + explore view from latest snapshot)
     all_metrics = build_dashboard.load_metrics(metrics_csv)
-    build_dashboard.write_dashboard(all_metrics, active, cfg,
+    build_dashboard.write_dashboard(all_metrics, active, sold_history.as_list(history), cfg,
                                     PROJECT_DIR / cfg["paths"]["dashboard_html"], today)
 
     log.info("run complete")

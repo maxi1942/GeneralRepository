@@ -115,4 +115,5 @@ paths:
   raw_dir: "data/raw"
   sold_raw_dir: "data/sold_raw"
   metrics_csv: "data/metrics_weekly.csv"
+  sold_history: "data/sold_history.csv.gz"
   dashboard_html: "dashboard.html"

@@ -515,7 +515,132 @@ def _district_series(rows, cfg, field):
     return out
 
 
-def build_html(rows, active, cfg, generated) -> str:
+def sold_payload(sold_hist, cfg) -> dict:
+    districts = cfg["districts"]
+    labels = {k: v["label"] for k, v in districts.items()}
+    buckets = cfg["property_type_buckets"]
+
+    def bucket(pt):
+        code = M._to_int(pt)
+        for name, codes in buckets.items():
+            if code in codes:
+                return name
+        return "other"
+
+    items = []
+    for r in sold_hist:
+        sp, price = _num(r.get("sqm_price")), _num(r.get("price"))
+        if not sp or not price:
+            continue
+        ch = _num(r.get("change_pct"))
+        items.append({
+            "d": M.district_of(r.get("zip_code"), districts) or "other",
+            "z": M._to_int(r.get("zip_code")), "s": M._to_int(r.get("size_m2")),
+            "r": M._to_int(r.get("rooms")), "p": int(price), "sp": int(sp),
+            "ch": round(ch, 1) if (ch is not None and ch < 0) else None,
+            "dt": (r.get("sold_date") or "")[:10], "st": (r.get("street") or "").strip(),
+            "pt": bucket(r.get("property_type")),
+        })
+    labels["other"] = "Other Copenhagen"
+    return {"items": items, "labels": labels}
+
+
+SOLD_HTML = """
+<section class="explore card">
+  <figcaption><h3>Sold prices — what apartments actually went for</h3>
+  <span class="sub">Every registered sale we've archived (land registry, via Boliga). Grows over time.</span></figcaption>
+  <div class="areas"><span class="areas-lbl">Areas</span><div id="sf-dist-chips" class="chips"></div></div>
+  <div class="filters">
+    <label>Type<select id="sf-type">
+      <option value="">All</option><option value="apartment">Apartments</option>
+      <option value="house">Houses</option></select></label>
+    <label>Rooms<select id="sf-rooms">
+      <option value="">Any</option><option>1</option><option>2</option><option>3</option>
+      <option>4</option><option value="5+">5+</option></select></label>
+    <label>Min m²<input id="sf-smin" type="number" min="0" step="5" placeholder="any"></label>
+    <label>Max m²<input id="sf-smax" type="number" min="0" step="5" placeholder="any"></label>
+    <label class="grow">Street contains<input id="sf-street" type="text" placeholder="e.g. Istedgade"></label>
+    <label>Sort by<select id="sf-sort">
+      <option value="date">Most recent</option>
+      <option value="sp-desc">DKK/m² (high → low)</option>
+      <option value="sp-asc">DKK/m² (low → high)</option>
+    </select></label>
+  </div>
+  <div id="sf-stats" class="kpi-row explore-stats"></div>
+  <div class="table-wrap"><table id="sf-table"><thead><tr>
+    <th>Sold</th><th>District</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
+    <th class="num">Sold price</th><th class="num">Sold /m²</th><th class="num">vs ask</th>
+  </tr></thead><tbody></tbody></table></div>
+  <div id="sf-more" class="more"></div>
+  <p class="methodology">These are <strong>realised</strong> sale prices from the public land registry —
+  what buyers actually paid — for a specific apartment (full address). “vs ask” shows how far below the
+  original asking price it sold, when the feed provides it. Sales register ~1–3 months after closing, so
+  the most recent weeks are still filling in. Search a street to see what nearby flats fetched.</p>
+</section>
+"""
+
+SOLD_JS = """
+<script>
+(function(){
+  var DATA = window.__SOLD__ || {items:[],labels:{}};
+  var items=DATA.items, labels=DATA.labels;
+  var $=function(id){return document.getElementById(id);};
+  var sel=new Set(); var wrap=$('sf-dist-chips');
+  var allChip=document.createElement('button'); allChip.className='chip all on'; allChip.textContent='All areas';
+  allChip.onclick=function(){ sel.clear(); sync(); render(); }; wrap.appendChild(allChip);
+  var chipEls={};
+  Object.keys(labels).forEach(function(k){
+    var c=document.createElement('button'); c.className='chip'; c.textContent=labels[k];
+    c.onclick=function(){ if(sel.has(k)) sel.delete(k); else sel.add(k); sync(); render(); };
+    chipEls[k]=c; wrap.appendChild(c);
+  });
+  function sync(){ allChip.classList.toggle('on', sel.size===0);
+    Object.keys(chipEls).forEach(function(k){ chipEls[k].classList.toggle('on', sel.has(k)); }); }
+  function median(a){ if(!a.length) return null; a=a.slice().sort(function(x,y){return x-y;});
+    var m=Math.floor(a.length/2); return a.length%2? a[m] : (a[m-1]+a[m])/2; }
+  function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
+  function tile(l,v,u){ return '<div class="kpi"><div class="kpi-label">'+l+'</div><div class="kpi-value">'+
+    v+'<span class="unit">'+(u||'')+'</span></div></div>'; }
+  function render(){
+    var ty=$('sf-type').value, rm=$('sf-rooms').value,
+        smin=parseFloat($('sf-smin').value), smax=parseFloat($('sf-smax').value),
+        st=$('sf-street').value.trim().toLowerCase(), sort=$('sf-sort').value;
+    var f=items.filter(function(x){
+      if(sel.size && !sel.has(x.d)) return false;
+      if(ty && x.pt!==ty) return false;
+      if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
+      if(!isNaN(smin) && (x.s==null||x.s<smin)) return false;
+      if(!isNaN(smax) && (x.s==null||x.s>smax)) return false;
+      if(st && x.st.toLowerCase().indexOf(st)<0) return false;
+      return true;
+    });
+    var sp=f.map(function(x){return x.sp;}), pr=f.map(function(x){return x.p;}),
+        ch=f.filter(function(x){return x.ch!=null;}).map(function(x){return x.ch;});
+    $('sf-stats').innerHTML = tile('Sales', f.length.toLocaleString('da-DK'),'') +
+      tile('Median price', fmt(median(pr)),' DKK') + tile('Median DKK/m²', fmt(median(sp)),'') +
+      tile('Median vs ask', ch.length? median(ch).toFixed(1)+'%':'–','');
+    if(sort==='sp-desc') f.sort(function(a,b){return b.sp-a.sp;});
+    else if(sort==='sp-asc') f.sort(function(a,b){return a.sp-b.sp;});
+    else f.sort(function(a,b){return (b.dt||'').localeCompare(a.dt||'');});
+    var top=f.slice(0,80).map(function(x){
+      var addr=(x.st||'').replace(/</g,'');
+      var gq=encodeURIComponent((x.st||'')+', '+(x.z||'')+' København');
+      var a='<a target="_blank" rel="noopener" href="https://www.google.com/search?q='+gq+'">'+(addr||'–')+'</a>';
+      return '<tr><td>'+(x.dt||'–')+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+a+
+        '</td><td class="num">'+(x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+
+        fmt(x.p)+'</td><td class="num">'+fmt(x.sp)+'</td><td class="num">'+(x.ch!=null? x.ch.toFixed(1)+'%':'–')+'</td></tr>';
+    }).join('');
+    $('sf-table').getElementsByTagName('tbody')[0].innerHTML=top;
+    $('sf-more').textContent = f.length>80? ('Showing 80 of '+f.length.toLocaleString('da-DK')+' — narrow the filters to see more.'):'';
+  }
+  ['sf-type','sf-rooms','sf-smin','sf-smax','sf-street','sf-sort'].forEach(function(id){ $(id).addEventListener('input',render); });
+  render();
+})();
+</script>
+"""
+
+
+def build_html(rows, active, sold_hist, cfg, generated) -> str:
     ptype_series = [_series(rows, seg, "median_sqm_price", lbl, slot) for seg, (lbl, slot) in PTYPE.items()]
     trend = [
         line_chart("Asking price per m²", "Median DKK, by property type",
@@ -540,6 +665,8 @@ def build_html(rows, active, cfg, generated) -> str:
     snaps = sorted({r["snapshot_date"] for r in rows})
     span = f"{snaps[0]} → {snaps[-1]}" if snaps else "no data yet"
     payload = json.dumps(explore_payload(active, cfg)).replace("</", "<\\/")
+    sold_pl = json.dumps(sold_payload(sold_hist or [], cfg)).replace("</", "<\\/")
+    n_sold = len(sold_hist or [])
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -568,6 +695,8 @@ neighbourhood", read the <b>sold</b> column.</div>
 <div class="grid-charts">{''.join(trend)}</div>
 <h2 class="section">Explore the current market</h2>
 {EXPLORE_HTML}
+<h2 class="section">Sold prices — {n_sold:,} archived sales</h2>
+{SOLD_HTML}
 <div class="note"><strong>Read this before trusting a trend.</strong> Asking prices are what sellers
 <em>want</em>, not what they get; realised sold prices lag ~1-3 months. District tags are by postcode
 (approximate). The source (Boliga) is an undocumented scrape that can drift. A single snapshot shows no
@@ -576,6 +705,8 @@ Statistik figures before any decision that matters.</div>
 </div>
 <script>window.__EXPLORE__ = {payload};</script>
 {EXPLORE_JS}
+<script>window.__SOLD__ = {sold_pl};</script>
+{SOLD_JS}
 </body></html>
 """
 
@@ -584,8 +715,8 @@ def ptype_series_field(rows, field):
     return [_series(rows, seg, field, lbl, slot) for seg, (lbl, slot) in PTYPE.items()]
 
 
-def write_dashboard(rows, active, cfg, out_path: Path, generated: date | None = None) -> Path:
+def write_dashboard(rows, active, sold_hist, cfg, out_path: Path, generated: date | None = None) -> Path:
     generated = generated or date.today()
-    out_path.write_text(build_html(rows, active or [], cfg, generated), encoding="utf-8")
+    out_path.write_text(build_html(rows, active or [], sold_hist or [], cfg, generated), encoding="utf-8")
     log.info("wrote dashboard: %s", out_path)
     return out_path
