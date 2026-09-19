@@ -55,8 +55,8 @@ scraper:
   page_size: 100
   max_pages: 200
   request_timeout_sec: 30
-  sleep_between_requests_sec: 0.7
-  max_retries: 4
+  sleep_between_requests_sec: 1.3   # gentle enough to mostly stay under Boliga's rate limit
+  max_retries: 5
 
 sold:
   base_url: "https://api.boliga.dk/api/v2/sold/search/results"
@@ -74,8 +74,8 @@ sold:
   # Sold is best-effort (secondary to the live feed): short timeout, few retries, and a
   # hard time budget so a throttled Boliga can't drag the run. Partial data is fine.
   request_timeout_sec: 15
-  max_retries: 2
-  time_budget_sec: 120
+  max_retries: 5           # a 429 waits Retry-After and retries, so allow several
+  time_budget_sec: 400     # enough headroom to ride out rate-limit cooldowns
 
 # Valuation model (#2): estimate each active listing's expected SALE value from
 # comparable *sold* records, then compare to its asking price. Comps are found by

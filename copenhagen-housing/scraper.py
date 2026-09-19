@@ -117,9 +117,18 @@ def _get(session: requests.Session, url: str, params: dict[str, Any],
             return resp.json()
         except Exception as err:  # noqa: BLE001 — retry on any transient failure
             last_err = err
-            log.warning("request failed (attempt %d/%d): %s", attempt, max_retries, err)
+            # Boliga rate-limits a burst of requests with HTTP 429. Respect Retry-After
+            # (or wait a fixed cooldown) so the paged fetch can drain and continue,
+            # instead of giving up and returning partial data.
+            wait = delay
+            resp_obj = getattr(err, "response", None)
+            if resp_obj is not None and getattr(resp_obj, "status_code", None) == 429:
+                ra = resp_obj.headers.get("Retry-After")
+                wait = float(ra) if (ra and str(ra).isdigit()) else 20.0
+            log.warning("request failed (attempt %d/%d): %s — waiting %.0fs",
+                        attempt, max_retries, err, wait if attempt < max_retries else 0)
             if attempt < max_retries:
-                time.sleep(delay)
+                time.sleep(wait)
                 delay *= 2
     raise RuntimeError(f"giving up after {max_retries} attempts: {last_err}")
 
