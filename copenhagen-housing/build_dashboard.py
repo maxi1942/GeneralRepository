@@ -296,10 +296,11 @@ EXPLORE_HTML = """
       <option value="dom-desc">Longest on market</option>
     </select></label>
     <label class="chk"><input type="checkbox" id="f-clean"> Hide flagged (find clean bargains)</label>
+    <label class="chk"><input type="checkbox" id="f-star"> ⭐ Starred only</label>
   </div>
   <div id="ex-stats" class="kpi-row explore-stats"></div>
   <div class="table-wrap"><table id="ex-table"><thead><tr>
-    <th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
+    <th></th><th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
     <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
     <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
@@ -324,6 +325,8 @@ EXPLORE_JS = """
   var DATA = window.__EXPLORE__ || {items:[],labels:{}};
   var items = DATA.items, labels = DATA.labels;
   var $ = function(id){return document.getElementById(id);};
+  function keyOf(x){ return 'L'+(x.u || (x.st+'_'+x.z)); }
+  function saveData(x){ return {t:'active', a:x.st, d:x.d, p:x.p, sp:x.sp, s:x.s, r:x.r, u:x.u, au:x.au, z:x.z}; }
   var sel = new Set();               // selected districts; empty = all
   var wrap = $('f-dist-chips');
   var allChip = document.createElement('button');
@@ -349,7 +352,7 @@ EXPLORE_JS = """
     var rm=$('f-rooms').value,
         smin=parseFloat($('f-smin').value), smax=parseFloat($('f-smax').value),
         st=$('f-street').value.trim().toLowerCase(),
-        en=$('f-energy').value, clean=$('f-clean').checked;
+        en=$('f-energy').value, clean=$('f-clean').checked, starOnly=$('f-star').checked;
     var f=items.filter(function(x){
       if(sel.size && !sel.has(x.d)) return false;
       if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
@@ -358,6 +361,7 @@ EXPLORE_JS = """
       if(st && x.st.toLowerCase().indexOf(st)<0) return false;
       if(en && x.en!==en) return false;
       if(clean && (x.fl&&x.fl.length)) return false;
+      if(starOnly && !window.CPHStars.has(keyOf(x))) return false;
       return true;
     });
     var sp=f.map(function(x){return x.sp;}),
@@ -395,7 +399,9 @@ EXPLORE_JS = """
         : ((x.fl&&x.fl.length)
             ? x.fl.map(function(t){return '<span class="flag">'+t+'</span>';}).join(' ')
             : '<span class="ok">✓ clean</span>');
-      return '<tr><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
+      var k=keyOf(x), on=window.CPHStars.has(k);
+      var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save">'+(on?'★':'☆')+'</button>';
+      return '<tr><td>'+star+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
         (x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+fmtdkk(x.p)+
         '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
         (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
@@ -406,9 +412,17 @@ EXPLORE_JS = """
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
     $('ex-more').textContent = rows.length>60? ('Showing top 60 of '+rows.length+'.'):'';
   }
-  ['f-rooms','f-smin','f-smax','f-street','f-sort','f-energy','f-clean'].forEach(function(id){
+  ['f-rooms','f-smin','f-smax','f-street','f-sort','f-energy','f-clean','f-star'].forEach(function(id){
     $(id).addEventListener('input',apply);
   });
+  var itemByKey={}; items.forEach(function(x){ itemByKey[keyOf(x)]=x; });
+  $('ex-table').addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.star[data-k]');
+    if(!b) return;
+    var k=b.getAttribute('data-k'), x=itemByKey[k];
+    window.CPHStars.toggle(k, x?saveData(x):{t:'active'});
+  });
+  window.CPHStars.onChange(apply);
   apply();
 })();
 </script>
@@ -497,6 +511,11 @@ td.flags{white-space:normal;max-width:220px;}
 .flag{display:inline-block;background:rgba(208,59,59,.12);color:#d03b3b;border-radius:4px;
 padding:1px 6px;font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;}
 .ok{color:#0ca30c;font-size:12px;} .pending{color:var(--muted);font-size:11px;font-style:italic;}
+.star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
+.star:hover{color:var(--c4);} .star.on{color:var(--c4);}
+.saved{margin:20px 0;border-left:3px solid var(--c4);}
+.saved figcaption h3{margin:0;font-size:15px;}
+.linkbtn{background:none;border:none;color:var(--c1);cursor:pointer;font:inherit;font-size:12px;padding:0;text-decoration:underline;}
 .methodology{color:var(--muted);font-size:12px;line-height:1.5;margin-top:12px;}
 .methodology strong{color:var(--ink2);} .methodology em{font-style:italic;}
 .note{margin-top:32px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);
@@ -568,10 +587,11 @@ SOLD_HTML = """
       <option value="sp-desc">DKK/m² (high → low)</option>
       <option value="sp-asc">DKK/m² (low → high)</option>
     </select></label>
+    <label class="chk"><input type="checkbox" id="sf-star"> ⭐ Starred only</label>
   </div>
   <div id="sf-stats" class="kpi-row explore-stats"></div>
   <div class="table-wrap"><table id="sf-table"><thead><tr>
-    <th>Sold</th><th>District</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
+    <th></th><th>Sold</th><th>District</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
     <th class="num">Sold price</th><th class="num">Sold /m²</th><th class="num">vs ask</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="sf-more" class="more"></div>
@@ -588,6 +608,8 @@ SOLD_JS = """
   var DATA = window.__SOLD__ || {items:[],labels:{}};
   var items=DATA.items, labels=DATA.labels;
   var $=function(id){return document.getElementById(id);};
+  function keyOf(x){ return 'S'+(x.u || (x.st+'_'+x.dt+'_'+x.p)); }
+  function saveData(x){ return {t:'sold', a:x.st, d:x.d, p:x.p, sp:x.sp, s:x.s, r:x.r, u:x.u, dt:x.dt, z:x.z}; }
   var sel=new Set(); var wrap=$('sf-dist-chips');
   var allChip=document.createElement('button'); allChip.className='chip all on'; allChip.textContent='All areas';
   allChip.onclick=function(){ sel.clear(); sync(); render(); }; wrap.appendChild(allChip);
@@ -607,7 +629,8 @@ SOLD_JS = """
   function render(){
     var ty=$('sf-type').value, rm=$('sf-rooms').value,
         smin=parseFloat($('sf-smin').value), smax=parseFloat($('sf-smax').value),
-        st=$('sf-street').value.trim().toLowerCase(), sort=$('sf-sort').value;
+        st=$('sf-street').value.trim().toLowerCase(), sort=$('sf-sort').value,
+        starOnly=$('sf-star').checked;
     var f=items.filter(function(x){
       if(sel.size && !sel.has(x.d)) return false;
       if(ty && x.pt!==ty) return false;
@@ -615,6 +638,7 @@ SOLD_JS = """
       if(!isNaN(smin) && (x.s==null||x.s<smin)) return false;
       if(!isNaN(smax) && (x.s==null||x.s>smax)) return false;
       if(st && x.st.toLowerCase().indexOf(st)<0) return false;
+      if(starOnly && !window.CPHStars.has(keyOf(x))) return false;
       return true;
     });
     var sp=f.map(function(x){return x.sp;}), pr=f.map(function(x){return x.p;}),
@@ -633,14 +657,95 @@ SOLD_JS = """
       var a = direct
         ? '<a target="_blank" rel="noopener" href="'+direct+'" title="Listing with photos">📷 '+(addr||'listing')+'</a>'
         : '<a target="_blank" rel="noopener" href="'+glink+'" title="Search this address">'+(addr||'–')+'</a>';
-      return '<tr><td>'+(x.dt||'–')+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+a+
+      var k=keyOf(x), on=window.CPHStars.has(k);
+      var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save">'+(on?'★':'☆')+'</button>';
+      return '<tr><td>'+star+'</td><td>'+(x.dt||'–')+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+a+
         '</td><td class="num">'+(x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+
         fmt(x.p)+'</td><td class="num">'+fmt(x.sp)+'</td><td class="num">'+(x.ch!=null? x.ch.toFixed(1)+'%':'–')+'</td></tr>';
     }).join('');
     $('sf-table').getElementsByTagName('tbody')[0].innerHTML=top;
     $('sf-more').textContent = f.length>80? ('Showing 80 of '+f.length.toLocaleString('da-DK')+' — narrow the filters to see more.'):'';
   }
-  ['sf-type','sf-rooms','sf-smin','sf-smax','sf-street','sf-sort'].forEach(function(id){ $(id).addEventListener('input',render); });
+  ['sf-type','sf-rooms','sf-smin','sf-smax','sf-street','sf-sort','sf-star'].forEach(function(id){ $(id).addEventListener('input',render); });
+  var itemByKey={}; items.forEach(function(x){ itemByKey[keyOf(x)]=x; });
+  $('sf-table').addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button.star[data-k]');
+    if(!b) return;
+    var k=b.getAttribute('data-k'), x=itemByKey[k];
+    window.CPHStars.toggle(k, x?saveData(x):{t:'sold'});
+  });
+  window.CPHStars.onChange(render);
+  render();
+})();
+</script>
+"""
+
+
+SAVED_HTML = """
+<section id="saved-panel" class="card saved" hidden>
+  <figcaption><h3>⭐ Saved listings (<span id="saved-count">0</span>)</h3>
+  <span class="sub">Starred on this device — kept even after a listing sells or delists.
+  <button id="saved-clear" class="linkbtn">Clear all</button></span></figcaption>
+  <div class="table-wrap"><table id="saved-table"><thead><tr>
+    <th></th><th>Type</th><th>Area</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
+    <th class="num">Price</th><th class="num">DKK/m²</th>
+  </tr></thead><tbody></tbody></table></div>
+</section>
+"""
+
+# Shared "star / save" module (browser localStorage) + the saved-panel renderer.
+# Loaded before the section scripts so window.CPHStars exists when they run.
+STARS_JS = """
+<script>
+window.CPHStars=(function(){
+  var K='cphStars_v1', store={};
+  try{ store=JSON.parse(localStorage.getItem(K)||'{}')||{}; }catch(e){ store={}; }
+  var cbs=[];
+  function persist(){ try{ localStorage.setItem(K, JSON.stringify(store)); }catch(e){} }
+  function fire(){ cbs.forEach(function(c){ try{c();}catch(e){} }); }
+  return {
+    has:function(k){ return !!store[k]; },
+    toggle:function(k,d){ if(store[k]) delete store[k]; else store[k]=Object.assign({at:Date.now()},d); persist(); fire(); },
+    remove:function(k){ delete store[k]; persist(); fire(); },
+    clear:function(){ store={}; persist(); fire(); },
+    all:function(){ return store; },
+    count:function(){ return Object.keys(store).length; },
+    onChange:function(cb){ cbs.push(cb); }
+  };
+})();
+(function(){
+  var labels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
+  var $=function(id){return document.getElementById(id);};
+  function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
+  function link(d){
+    var addr=(d.a||'').replace(/</g,'');
+    var href = d.au ? d.au : (d.u? 'https://www.boliga.dk/bolig/'+d.u
+      : ('https://www.google.com/search?q='+encodeURIComponent((d.a||'')+', '+(d.z||'')+' København')));
+    return '<a target="_blank" rel="noopener" href="'+href+'">'+(addr||'listing')+'</a>';
+  }
+  function render(){
+    var panel=$('saved-panel'); if(!panel) return;
+    var st=window.CPHStars.all(), keys=Object.keys(st);
+    $('saved-count').textContent=keys.length;
+    panel.hidden = keys.length===0;
+    keys.sort(function(a,b){return (st[b].at||0)-(st[a].at||0);});
+    $('saved-table').getElementsByTagName('tbody')[0].innerHTML = keys.map(function(k){
+      var d=st[k];
+      return '<tr><td><button class="star on" data-sk="'+k+'" title="Remove">★</button></td>'+
+        '<td>'+(d.t==='sold'?('Sold '+(d.dt||'')):'Listing')+'</td>'+
+        '<td>'+(labels[d.d]||'–')+'</td><td>'+link(d)+'</td>'+
+        '<td class="num">'+(d.s||'–')+'</td><td class="num">'+(d.r||'–')+'</td>'+
+        '<td class="num">'+fmt(d.p)+'</td><td class="num">'+fmt(d.sp)+'</td></tr>';
+    }).join('');
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest && e.target.closest('button[data-sk]');
+    if(b){ window.CPHStars.remove(b.getAttribute('data-sk')); }
+  });
+  var clr=$('saved-clear'); if(clr) clr.onclick=function(){
+    if(confirm('Remove all saved listings?')) window.CPHStars.clear();
+  };
+  window.CPHStars.onChange(render);
   render();
 })();
 </script>
@@ -692,6 +797,7 @@ from Boliga. Asking prices, cuts and days-on-market are <em>leading</em> indicat
 sold prices are the lagging ground truth.</p>
 <div class="asof">Generated {generated.isoformat()} · {len(snaps)} snapshot(s) · {span}</div></header>
 {kpi_tiles(rows)}
+{SAVED_HTML}
 <div class="callout"><strong>Asking vs. sold — the key distinction.</strong>
 <b>Asking</b> = what sellers list live listings at (leading, updates weekly).
 <b>Sold (realised)</b> = what homes actually changed hands for, from the land registry
@@ -711,6 +817,7 @@ direction — several consistent weeks do. Cross-check quarterly against officia
 Statistik figures before any decision that matters.</div>
 </div>
 <script>window.__EXPLORE__ = {payload};</script>
+{STARS_JS}
 {EXPLORE_JS}
 <script>window.__SOLD__ = {sold_pl};</script>
 {SOLD_JS}
