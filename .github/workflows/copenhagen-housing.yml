@@ -6,8 +6,11 @@ name: Copenhagen housing snapshot
 
 on:
   schedule:
-    # Mondays 06:17 UTC (off the :00 mark to avoid the cron stampede).
-    - cron: "17 6 * * 1"
+    # Mon + Thu 06:17 UTC (off the :00 mark to avoid the cron stampede). Twice a week
+    # because GitHub's scheduler is best-effort and drops some fires — extra windows
+    # make a weekly refresh far more likely to actually land. Same-week runs just add
+    # more snapshots (dated), which only improves the trend history.
+    - cron: "17 6 * * 1,4"
   workflow_dispatch:      # lets you run it on demand to validate the API config
 
 permissions:
