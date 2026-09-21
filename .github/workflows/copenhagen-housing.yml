@@ -48,5 +48,12 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "Weekly Copenhagen housing snapshot ($(date -u +%Y-%m-%d))"
-            git push
+            # Resilient push: if main moved while we ran (a concurrent push), rebase
+            # our data commit on top and retry, so the run never fails just to lose data.
+            for i in 1 2 3 4 5; do
+              git push origin HEAD:main && break
+              echo "push rejected (main moved) — rebasing and retrying ($i)"
+              git pull --rebase --autostash origin main || true
+              sleep 3
+            done
           fi
