@@ -258,6 +258,7 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
             "s": int(size) if size else None, "r": M._to_int(r.get("rooms")),
             "p": int(price) if price else None, "sp": int(sp),
             "dom": M._to_int(r.get("days_on_market")),
+            "ld": (r.get("created_date") or "")[:10] or None,  # date the listing went live
             "cut": _num(r.get("price_change_pct")) or 0,
             "st": (r.get("street") or "").strip(),
             "e": int(est) if est else None,          # comps-based expected sold DKK/m²
@@ -290,6 +291,7 @@ EXPLORE_HTML = """
       <option value="">Any</option><option>A</option><option>B</option><option>C</option>
       <option>D</option><option>E</option><option>F</option><option>G</option></select></label>
     <label>Sort by<select id="f-sort">
+      <option value="new">Newest listed</option>
       <option value="value">Best value (asking vs comps)</option>
       <option value="sp-desc">DKK/m² (high → low)</option>
       <option value="sp-asc">DKK/m² (low → high)</option>
@@ -302,7 +304,7 @@ EXPLORE_HTML = """
   <div class="table-wrap"><table id="ex-table"><thead><tr>
     <th></th><th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
     <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
-    <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th class="num">Days</th><th class="num">Cut</th>
+    <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="ex-more" class="more"></div>
   <p class="methodology">“Est. sold /m²” is the median price per m² of comparable <em>sold</em> homes
@@ -315,6 +317,9 @@ EXPLORE_HTML = """
   the genuinely interesting one; tick <b>“Hide flagged”</b> to hunt those. Detail is fetched a few
   hundred listings per week (candidates first), so some rows read <em>pending…</em> until enriched.
   Balcony/condition aren't in Boliga's data — they're only in the agent's description behind the link.
+  <strong>“Listed”</strong> is when the listing went live (sorted newest-first by default); a
+  <span class="newbadge">NEW</span> tag marks the last 7 days — though an agent re-listing a stale flat
+  can reset that date, so an occasional “new” is really a re-list.
   Even clean, this is a screen to shortlist and inspect, not a valuation.</p>
 </section>
 """
@@ -378,7 +383,8 @@ EXPLORE_JS = """
     var sort=$('f-sort').value;
     var rows=f.slice();
     var BIG=1e12;
-    if(sort==='value') rows.sort(function(a,b){return (a.g==null?BIG:a.g)-(b.g==null?BIG:b.g);});
+    if(sort==='new') rows.sort(function(a,b){return (b.ld||'').localeCompare(a.ld||'');});
+    else if(sort==='value') rows.sort(function(a,b){return (a.g==null?BIG:a.g)-(b.g==null?BIG:b.g);});
     else if(sort==='sp-asc') rows.sort(function(a,b){return a.sp-b.sp;});
     else if(sort==='dom-desc') rows.sort(function(a,b){return (b.dom||0)-(a.dom||0);});
     else rows.sort(function(a,b){return b.sp-a.sp;});
@@ -399,6 +405,8 @@ EXPLORE_JS = """
         : ((x.fl&&x.fl.length)
             ? x.fl.map(function(t){return '<span class="flag">'+t+'</span>';}).join(' ')
             : '<span class="ok">✓ clean</span>');
+      var isNew = (x.dom!=null && x.dom<=7);
+      var listed = x.ld ? (x.ld + (isNew?' <span class="newbadge">NEW</span>':'')) : '–';
       var k=keyOf(x), on=window.CPHStars.has(k);
       var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save">'+(on?'★':'☆')+'</button>';
       return '<tr><td>'+star+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
@@ -406,7 +414,7 @@ EXPLORE_JS = """
         '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
         (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
         '</td><td class="num '+gcls+'">'+gap+'</td><td>'+en+'</td><td class="flags">'+flags+
-        '</td><td class="num">'+(x.dom==null?'–':x.dom)+
+        '</td><td class="lst">'+listed+'</td><td class="num">'+(x.dom==null?'–':x.dom)+
         '</td><td class="num">'+(x.cut<0? x.cut.toFixed(0)+'%':'–')+'</td></tr>';
     }).join('');
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
@@ -513,6 +521,8 @@ td.flags{white-space:normal;max-width:220px;}
 .flag{display:inline-block;background:rgba(208,59,59,.12);color:#d03b3b;border-radius:4px;
 padding:1px 6px;font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;}
 .ok{color:#0ca30c;font-size:12px;} .pending{color:var(--muted);font-size:11px;font-style:italic;}
+td.lst{font-variant-numeric:tabular-nums;color:var(--ink2);}
+.newbadge{display:inline-block;background:var(--c3);color:#fff;border-radius:4px;padding:0 5px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:1px;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
