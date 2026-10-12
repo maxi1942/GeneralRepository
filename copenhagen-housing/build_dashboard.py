@@ -518,6 +518,7 @@ padding:1px 6px;font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
 .saved figcaption h3{margin:0;font-size:15px;}
 .linkbtn{background:none;border:none;color:var(--c1);cursor:pointer;font:inherit;font-size:12px;padding:0;text-decoration:underline;}
+.soldbadge{display:inline-block;background:#0ca30c;color:#fff;border-radius:4px;padding:1px 7px;font-size:12px;font-weight:600;}
 .methodology{color:var(--muted);font-size:12px;line-height:1.5;margin-top:12px;}
 .methodology strong{color:var(--ink2);} .methodology em{font-style:italic;}
 .note{margin-top:32px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);
@@ -687,13 +688,18 @@ SOLD_JS = """
 
 SAVED_HTML = """
 <section id="saved-panel" class="card saved" hidden>
-  <figcaption><h3>⭐ Saved listings (<span id="saved-count">0</span>)</h3>
-  <span class="sub">Starred on this device — kept even after a listing sells or delists.
-  <button id="saved-clear" class="linkbtn">Clear all</button></span></figcaption>
+  <figcaption><h3>⭐ Saved listings (<span id="saved-count">0</span>) · <span id="saved-sold">0</span> sold</h3>
+  <span class="sub">Starred on this device. Each one is auto-matched against the sold archive —
+  when it sells, it's flagged <strong>SOLD</strong> with the price it went for vs. the asking you
+  saved. <button id="saved-clear" class="linkbtn">Clear all</button></span></figcaption>
   <div class="table-wrap"><table id="saved-table"><thead><tr>
-    <th></th><th>Type</th><th>Area</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
-    <th class="num">Price</th><th class="num">DKK/m²</th>
+    <th></th><th>Area</th><th>Address</th><th class="num">m²</th><th class="num">Your asking</th>
+    <th class="num">Sold for</th><th class="num">Δ vs ask</th><th>Status</th>
   </tr></thead><tbody></tbody></table></div>
+  <p class="methodology">Matched by address against the weekly sold archive, so a sale shows up here
+  within a week or two of registering (land-registry lag). “Your asking” is the price captured the
+  moment you starred it; “Sold for” is the realised price; “Δ vs ask” is how far below (−) or above
+  the asking it actually sold. Stars live in <strong>this browser</strong> only.</p>
 </section>
 """
 
@@ -721,11 +727,24 @@ window.CPHStars=(function(){
   var labels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
   var $=function(id){return document.getElementById(id);};
   function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
+  function norm(s){ return (s||'').toLowerCase().replace(/\\s+/g,' ').trim(); }
   function link(d){
     var addr=(d.a||'').replace(/</g,'');
     var href = d.au ? d.au : (d.u? 'https://www.boliga.dk/bolig/'+d.u
       : ('https://www.google.com/search?q='+encodeURIComponent((d.a||'')+', '+(d.z||'')+' København')));
     return '<a target="_blank" rel="noopener" href="'+href+'">'+(addr||'listing')+'</a>';
+  }
+  // index the embedded sold archive by address (and id) so a saved listing can be
+  // matched to its realised sale entirely in the browser.
+  var soldByAddr={}, soldById={};
+  var soldItems=(window.__SOLD__&&window.__SOLD__.items)||[];
+  soldItems.forEach(function(s){
+    var a=norm(s.st); if(a && !soldByAddr[a]) soldByAddr[a]=s;
+    if(s.u) soldById[s.u]=s;
+  });
+  function matchSold(d){
+    if(d.u && soldById[d.u]) return soldById[d.u];
+    var a=norm(d.a); return a? soldByAddr[a] : null;
   }
   function render(){
     var panel=$('saved-panel'); if(!panel) return;
@@ -733,14 +752,32 @@ window.CPHStars=(function(){
     $('saved-count').textContent=keys.length;
     panel.hidden = keys.length===0;
     keys.sort(function(a,b){return (st[b].at||0)-(st[a].at||0);});
-    $('saved-table').getElementsByTagName('tbody')[0].innerHTML = keys.map(function(k){
+    var soldN=0;
+    var html=keys.map(function(k){
       var d=st[k];
+      // a saved sold-record is already a realised sale; a saved listing we try to match
+      var isSold = d.t==='sold', m = isSold? d : matchSold(d);
+      var ask = isSold? null : d.p;              // price captured when starred
+      var soldFor = m? m.p : null;
+      var when = m? (m.dt||'') : '';
+      var delta=null;
+      if(soldFor!=null && ask) delta=(soldFor-ask)/ask*100;
+      if(m) soldN++;
+      var dStr = delta==null? '–' : (delta>0?'+':'')+delta.toFixed(1)+'%';
+      var dCls = delta==null? '' : (delta<0?'gap-lo':'gap-hi');
+      var status = m
+        ? '<span class="soldbadge">SOLD'+(when?' '+when:'')+'</span>'
+        : '<span class="pending">listed / watching</span>';
       return '<tr><td><button class="star on" data-sk="'+k+'" title="Remove">★</button></td>'+
-        '<td>'+(d.t==='sold'?('Sold '+(d.dt||'')):'Listing')+'</td>'+
         '<td>'+(labels[d.d]||'–')+'</td><td>'+link(d)+'</td>'+
-        '<td class="num">'+(d.s||'–')+'</td><td class="num">'+(d.r||'–')+'</td>'+
-        '<td class="num">'+fmt(d.p)+'</td><td class="num">'+fmt(d.sp)+'</td></tr>';
+        '<td class="num">'+(d.s||'–')+'</td>'+
+        '<td class="num">'+fmt(ask)+'</td>'+
+        '<td class="num">'+fmt(soldFor)+'</td>'+
+        '<td class="num '+dCls+'">'+dStr+'</td>'+
+        '<td>'+status+'</td></tr>';
     }).join('');
+    $('saved-table').getElementsByTagName('tbody')[0].innerHTML=html;
+    $('saved-sold').textContent=soldN;
   }
   document.addEventListener('click', function(e){
     var b=e.target.closest && e.target.closest('button[data-sk]');
@@ -821,9 +858,9 @@ direction — several consistent weeks do. Cross-check quarterly against officia
 Statistik figures before any decision that matters.</div>
 </div>
 <script>window.__EXPLORE__ = {payload};</script>
+<script>window.__SOLD__ = {sold_pl};</script>
 {STARS_JS}
 {EXPLORE_JS}
-<script>window.__SOLD__ = {sold_pl};</script>
 {SOLD_JS}
 </body></html>
 """
