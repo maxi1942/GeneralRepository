@@ -259,6 +259,8 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
             "p": int(price) if price else None, "sp": int(sp),
             "dom": M._to_int(r.get("days_on_market")),
             "ld": (r.get("created_date") or "")[:10] or None,  # date the listing went live
+            "oh": (r.get("open_house") or "").strip()[:10] or None,   # next public showing (date)
+            "oht": ((r.get("open_house") or "").strip()[11:16] or None),  # showing clock time HH:MM
             "cut": _num(r.get("price_change_pct")) or 0,
             "st": (r.get("street") or "").strip(),
             "e": int(est) if est else None,          # comps-based expected sold DKK/m²
@@ -290,8 +292,11 @@ EXPLORE_HTML = """
     <label>Energy<select id="f-energy">
       <option value="">Any</option><option>A</option><option>B</option><option>C</option>
       <option>D</option><option>E</option><option>F</option><option>G</option></select></label>
+    <label>Open house<select id="f-oh">
+      <option value="">Any</option><option value="any">Has a showing</option></select></label>
     <label>Sort by<select id="f-sort">
       <option value="new">Newest listed</option>
+      <option value="oh">Showing soonest</option>
       <option value="value">Best value (asking vs comps)</option>
       <option value="sp-desc">DKK/m² (high → low)</option>
       <option value="sp-asc">DKK/m² (low → high)</option>
@@ -304,7 +309,7 @@ EXPLORE_HTML = """
   <div class="table-wrap"><table id="ex-table"><thead><tr>
     <th></th><th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
     <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
-    <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
+    <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Open house</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
   </tr></thead><tbody></tbody></table></div>
   <div id="ex-more" class="more"></div>
   <p class="methodology">“Est. sold /m²” is the median price per m² of comparable <em>sold</em> homes
@@ -320,6 +325,10 @@ EXPLORE_HTML = """
   <strong>“Listed”</strong> is when the listing went live (sorted newest-first by default); a
   <span class="newbadge">NEW</span> tag marks the last 7 days — though an agent re-listing a stale flat
   can reset that date, so an occasional “new” is really a re-list.
+  <strong>“Open house”</strong> is the next public showing (åbent hus) straight from Boliga's feed —
+  pick a date in the filter to see only flats showing that day. It refreshes every run, but only ~half
+  of listings publish a showing date, and times are shown as Boliga lists them — always confirm on the
+  listing before turning up.
   Even clean, this is a screen to shortlist and inspect, not a valuation.</p>
 </section>
 """
@@ -353,11 +362,23 @@ EXPLORE_JS = """
   function fmtdkk(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
   function tile(label,val,unit){ return '<div class="kpi"><div class="kpi-label">'+label+
     '</div><div class="kpi-value">'+val+'<span class="unit">'+(unit||'')+'</span></div></div>'; }
+  // populate the open-house date picker with the actual upcoming showing dates (+ counts)
+  var todayStr=new Date().toISOString().slice(0,10);
+  (function(){
+    var counts={};
+    items.forEach(function(x){ if(x.oh && x.oh>=todayStr) counts[x.oh]=(counts[x.oh]||0)+1; });
+    Object.keys(counts).sort().forEach(function(d){
+      var o=document.createElement('option'); o.value=d;
+      var lbl=d; try{ lbl=new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }catch(e){}
+      o.textContent=lbl+' ('+counts[d]+')'; $('f-oh').appendChild(o);
+    });
+  })();
   function apply(){
     var rm=$('f-rooms').value,
         smin=parseFloat($('f-smin').value), smax=parseFloat($('f-smax').value),
         st=$('f-street').value.trim().toLowerCase(),
-        en=$('f-energy').value, clean=$('f-clean').checked, starOnly=$('f-star').checked;
+        en=$('f-energy').value, clean=$('f-clean').checked, starOnly=$('f-star').checked,
+        ohf=$('f-oh').value;
     var f=items.filter(function(x){
       if(sel.size && !sel.has(x.d)) return false;
       if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
@@ -367,6 +388,8 @@ EXPLORE_JS = """
       if(en && x.en!==en) return false;
       if(clean && (x.fl&&x.fl.length)) return false;
       if(starOnly && !window.CPHStars.has(keyOf(x))) return false;
+      if(ohf==='any'){ if(!x.oh) return false; }
+      else if(ohf){ if(x.oh!==ohf) return false; }
       return true;
     });
     var sp=f.map(function(x){return x.sp;}),
@@ -384,6 +407,7 @@ EXPLORE_JS = """
     var rows=f.slice();
     var BIG=1e12;
     if(sort==='new') rows.sort(function(a,b){return (b.ld||'').localeCompare(a.ld||'');});
+    else if(sort==='oh') rows.sort(function(a,b){return (a.oh||'9999-99-99').localeCompare(b.oh||'9999-99-99');});
     else if(sort==='value') rows.sort(function(a,b){return (a.g==null?BIG:a.g)-(b.g==null?BIG:b.g);});
     else if(sort==='sp-asc') rows.sort(function(a,b){return a.sp-b.sp;});
     else if(sort==='dom-desc') rows.sort(function(a,b){return (b.dom||0)-(a.dom||0);});
@@ -407,6 +431,9 @@ EXPLORE_JS = """
             : '<span class="ok">✓ clean</span>');
       var isNew = (x.dom!=null && x.dom<=7);
       var listed = x.ld ? (x.ld + (isNew?' <span class="newbadge">NEW</span>':'')) : '–';
+      var ohSoon = (x.oh && x.oh>=todayStr);
+      var showing = x.oh ? ('<span class="'+(ohSoon?'ohnext':'ohpast')+'">'+x.oh+
+          (x.oht?' <span class="ohtime">'+x.oht+'</span>':'')+'</span>') : '–';
       var k=keyOf(x), on=window.CPHStars.has(k);
       var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save">'+(on?'★':'☆')+'</button>';
       return '<tr><td>'+star+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
@@ -414,14 +441,14 @@ EXPLORE_JS = """
         '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
         (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
         '</td><td class="num '+gcls+'">'+gap+'</td><td>'+en+'</td><td class="flags">'+flags+
-        '</td><td class="lst">'+listed+'</td><td class="num">'+(x.dom==null?'–':x.dom)+
+        '</td><td class="lst">'+showing+'</td><td class="lst">'+listed+'</td><td class="num">'+(x.dom==null?'–':x.dom)+
         '</td><td class="num">'+(x.cut<0? x.cut.toFixed(0)+'%':'–')+'</td></tr>';
     }).join('');
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
     $('ex-more').textContent = rows.length.toLocaleString('da-DK')+' listing'+(rows.length===1?'':'s')+' shown — scroll the table to see all.';
   }
   function debounce(fn,ms){var t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};}
-  ['f-rooms','f-smin','f-smax','f-sort','f-energy','f-clean','f-star'].forEach(function(id){
+  ['f-rooms','f-smin','f-smax','f-sort','f-energy','f-clean','f-star','f-oh'].forEach(function(id){
     $(id).addEventListener('input',apply);
   });
   $('f-street').addEventListener('input', debounce(apply,160));
@@ -523,6 +550,8 @@ padding:1px 6px;font-size:11px;margin:1px 2px 1px 0;white-space:nowrap;}
 .ok{color:#0ca30c;font-size:12px;} .pending{color:var(--muted);font-size:11px;font-style:italic;}
 td.lst{font-variant-numeric:tabular-nums;color:var(--ink2);}
 .newbadge{display:inline-block;background:var(--c3);color:#fff;border-radius:4px;padding:0 5px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:1px;}
+.ohnext{color:var(--c1);font-weight:600;} .ohpast{color:var(--muted);}
+.ohtime{color:var(--muted);font-weight:400;font-size:12px;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
