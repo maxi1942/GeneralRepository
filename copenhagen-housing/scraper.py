@@ -42,6 +42,9 @@ FIELD_CANDIDATES: dict[str, list[str]] = {
     "build_year": ["buildYear", "yearBuilt"],
     "is_foreclosure": ["isForeclosure", "foreclosure"],
     "created_date": ["createdDate", "created"],
+    # Next public showing ("åbent hus"). Probing several candidate shapes: the search
+    # feed may carry a single date, a list of dates, or an array of openHouse objects.
+    "open_house": ["openHouses", "openHouse", "openHouseDate", "openHouseDates"],
     "latitude": ["latitude", "lat"],
     "longitude": ["longitude", "lng", "lon"],
 }
