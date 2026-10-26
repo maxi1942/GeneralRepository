@@ -154,6 +154,16 @@ def _sold_metrics(rows: list[dict[str, Any]], n_active: int,
     if dated > 0 and in_window > 0:
         monthly_rate = in_window / (sold["rate_window_days"] / 30.0)
         months_supply = round(n_active / monthly_rate, 1)
+        # Guard against a truncated/partial sold fetch (e.g. a rate-limited run that
+        # returned only a fraction of sales): too few in-window sales undercounts the
+        # rate and balloons months-of-supply. An implausibly high value is bad data,
+        # not a real signal, so drop it rather than let it distort the trend.
+        ceiling = sold.get("max_sane_months_supply", 12)
+        if months_supply > ceiling:
+            log.warning("months_of_supply %.1f exceeds sane ceiling %.1f "
+                        "(in_window=%d, likely a truncated sold fetch) — dropping",
+                        months_supply, ceiling, in_window)
+            months_supply = None
     return {
         "sold_count": len(rows),
         "median_sold_sqm_price": _median(sqm),
