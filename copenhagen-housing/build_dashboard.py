@@ -311,13 +311,29 @@ EXPLORE_HTML = """
     <label class="chk"><input type="checkbox" id="f-clean"> Hide flagged (find clean bargains)</label>
     <label class="chk"><input type="checkbox" id="f-star"> ⭐ Starred only</label>
   </div>
+  <div class="viewtoggle">
+    <button id="view-list-btn" class="vbtn on" type="button">☰ List</button>
+    <button id="view-map-btn" class="vbtn" type="button">🗺️ Map</button>
+  </div>
   <div id="ex-stats" class="kpi-row explore-stats"></div>
-  <div class="table-wrap"><table id="ex-table"><thead><tr>
-    <th></th><th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
-    <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
-    <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Open house</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
-  </tr></thead><tbody></tbody></table></div>
-  <div id="ex-more" class="more"></div>
+  <div id="ex-list">
+    <div class="table-wrap"><table id="ex-table"><thead><tr>
+      <th></th><th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
+      <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
+      <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Open house</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div id="ex-more" class="more"></div>
+  </div>
+  <div id="ex-map" hidden>
+    <div class="map-legend">
+      <span><i style="background:#eb6834"></i>Showing today</span>
+      <span><i style="background:#2a78d6"></i>Upcoming showing</span>
+      <span><i style="background:#9a9a94"></i>No showing date</span>
+    </div>
+    <div id="map-stats" class="more"></div>
+    <div id="map" class="mapbox"></div>
+    <p id="map-fallback" class="empty map-fallback" hidden></p>
+  </div>
   <p class="methodology">“Est. sold /m²” is the median price per m² of comparable <em>sold</em> homes
   (same district, property type, ±25% size and, where possible, same rooms). “vs comps” is how far
   asking sits above (+) or below (−) that — asking is normally a few % above realised sales, so treat
@@ -336,6 +352,9 @@ EXPLORE_HTML = """
   of listings publish a showing date, and times are shown as Boliga lists them — always confirm on the
   listing before turning up. The <strong>📅</strong> next to an upcoming showing opens Google Calendar
   with the event pre-filled; pick which calendar (e.g. your shared one) from the dropdown before saving.
+  Switch to <strong>🗺️ Map</strong> to see the same filtered listings as pins (coloured by showing
+  status) — handy for planning a route between viewings; the map is the only part that loads anything
+  from the internet, and if it can't, the list still works.
   Even clean, this is a screen to shortlist and inspect, not a valuation.</p>
 </section>
 """
@@ -476,7 +495,22 @@ EXPLORE_JS = """
     }).join('');
     $('ex-table').getElementsByTagName('tbody')[0].innerHTML=top;
     $('ex-more').textContent = rows.length.toLocaleString('da-DK')+' listing'+(rows.length===1?'':'s')+' shown — scroll the table to see all.';
+    lastRows=rows;
+    // keep the map in sync with the list when the Map view is open
+    if(view==='map' && window.CPHMap) window.CPHMap.update(lastRows);
   }
+  // List / Map view toggle — both views share this one filter bar.
+  var view='list', lastRows=[];
+  function setView(v){
+    view=v;
+    $('view-list-btn').classList.toggle('on', v==='list');
+    $('view-map-btn').classList.toggle('on', v==='map');
+    $('ex-list').hidden = (v==='map');
+    $('ex-map').hidden = (v!=='map');
+    if(v==='map' && window.CPHMap) window.CPHMap.show(lastRows);
+  }
+  $('view-list-btn').addEventListener('click', function(){ setView('list'); });
+  $('view-map-btn').addEventListener('click', function(){ setView('map'); });
   function debounce(fn,ms){var t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};}
   ['f-rooms','f-smin','f-smax','f-sort','f-energy','f-clean','f-star','f-oh'].forEach(function(id){
     $(id).addEventListener('input',apply);
@@ -598,6 +632,11 @@ color:#fff;font-size:11px;font-weight:700;vertical-align:1px;}
 .map-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin:10px 0 2px;}
 .map-legend i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px;}
 .map-fallback{text-align:left;}
+.viewtoggle{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:14px 0 2px;}
+.vbtn{appearance:none;background:var(--plane);border:none;color:var(--ink2);font:inherit;font-size:13px;
+font-weight:600;padding:7px 14px;cursor:pointer;}
+.vbtn+.vbtn{border-left:1px solid var(--border);}
+.vbtn.on{background:var(--c1);color:#fff;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
@@ -796,16 +835,13 @@ SAVED_HTML = """
 TABS_JS = """
 <script>
 (function(){
-  var valid={'for-sale':1,'map':1,'sold':1,'saved':1,'market':1}, def='for-sale';
+  var valid={'for-sale':1,'sold':1,'saved':1,'market':1}, def='for-sale';
   var btns=[].slice.call(document.querySelectorAll('.tab-btn'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   function show(name){
     if(!valid[name]) name=def;
     btns.forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-tab')===name); });
     panels.forEach(function(p){ p.classList.toggle('on', p.id==='tab-'+name); });
-    // the map is built lazily the first time its tab is opened, and needs a resize nudge
-    // because Leaflet can't measure a hidden container.
-    if(name==='map' && window.CPHMap) { try{ window.CPHMap.onShow(); }catch(e){} }
   }
   btns.forEach(function(b){ b.addEventListener('click', function(){
     var n=b.getAttribute('data-tab');
@@ -913,47 +949,17 @@ window.CPHStars=(function(){
 """
 
 
-MAP_HTML = """
-<section class="explore card">
-  <figcaption><h3>Map of current listings</h3>
-  <span class="sub">Plot listings by area and filter to a viewing day — handy for planning a route
-  between open houses. Loads a map from the internet; if that fails, the rest of the app still works.</span></figcaption>
-  <div class="areas"><span class="areas-lbl">Areas</span><div id="map-dist-chips" class="chips"></div></div>
-  <div class="filters">
-    <label>Open house<select id="map-oh"><option value="">Any</option>
-      <option value="any">Has a showing</option></select></label>
-    <label>Rooms<select id="map-rooms">
-      <option value="">Any</option><option>1</option><option>2</option><option>3</option>
-      <option>4</option><option value="5+">5+</option></select></label>
-    <label class="chk"><input type="checkbox" id="map-star"> ⭐ Starred only</label>
-  </div>
-  <div class="map-legend">
-    <span><i style="background:#eb6834"></i>Showing today</span>
-    <span><i style="background:#2a78d6"></i>Upcoming showing</span>
-    <span><i style="background:#9a9a94"></i>No showing date</span>
-  </div>
-  <div id="map-stats" class="more"></div>
-  <div id="map" class="mapbox"></div>
-  <p id="map-fallback" class="empty map-fallback" hidden></p>
-  <p class="methodology">Pins come straight from Boliga's coordinates (every listing has them). Colour
-  shows whether a public showing is booked. Click a pin for the address, price, showing time, a
-  <strong>📅</strong> add-to-calendar link and the listing. The map is the only part of the app that
-  loads anything from the internet — if it can't (no connection, or blocked), you'll see a notice here
-  and every other tab keeps working.</p>
-</section>
-"""
-
-# Map tab: Leaflet + OpenStreetMap tiles, built lazily on first open and fully isolated —
-# if Leaflet fails to load or anything throws, we show a fallback notice and the rest of the
-# app is untouched. Canvas-rendered circle markers (no icon images) keep ~2.5k pins smooth.
+# Map view inside the For-sale tab. It is DRIVEN by the For-sale filter bar — CPHMap.show(f)
+# and CPHMap.update(f) take the already-filtered listing array, so list and map always agree.
+# Built lazily on first switch to Map and fully isolated: if Leaflet fails to load or anything
+# throws, a fallback notice shows and every other view keeps working. Canvas circle markers
+# (no icon images) keep thousands of pins smooth.
 MAP_JS = """
 <script>
 window.CPHMap=(function(){
-  var built=false, map=null, layer=null, warned=false;
-  var DATA=window.__EXPLORE__||{items:[],labels:{}};
-  var items=DATA.items, labels=DATA.labels;
+  var built=false, failed=false, map=null, layer=null, warned=false, pending=null;
+  var labels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
   var $=function(id){return document.getElementById(id);};
-  var sel=new Set();
   function todayStr(){ return new Date().toISOString().slice(0,10); }
   function pad2(n){ return (n<10?'0':'')+n; }
   function gcal(x){
@@ -969,7 +975,6 @@ window.CPHMap=(function(){
       '&details='+encodeURIComponent('Open house / åbent hus.\\n'+(href?('Listing: '+href+'\\n'):'')+
         '\\n(Time as Boliga lists it — confirm on the listing.)');
   }
-  function keyOf(x){ return 'L'+(x.u || (x.st+'_'+x.z)); }
   function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
   function color(x){
     if(!x.oh) return '#9a9a94';
@@ -978,9 +983,8 @@ window.CPHMap=(function(){
   function fallback(msg){
     var el=$('map-fallback'); if(el){ el.hidden=false;
       el.innerHTML='🗺️ '+(msg||'The map could not load.')+' It needs a live connection and pulls a '+
-        'map library + tiles from the internet (the only part of this app that does). Everything else '+
-        'works — <button class="linkbtn" onclick="location.hash=\\'for-sale\\'">browse in For sale</button> '+
-        'and use the area + open-house filters there.'; }
+        'map library + tiles from the internet (the only part of this app that does) — the list view '+
+        'and every other tab keep working. Switch back to <b>☰ List</b> to browse.'; }
     var m=$('map'); if(m) m.style.display='none';
   }
   function popup(x){
@@ -992,21 +996,18 @@ window.CPHMap=(function(){
     return '<b>'+title+'</b><br>'+(labels[x.d]||'')+' · '+(x.z||'')+
       '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh;
   }
-  function render(){
+  function draw(f){
     if(!layer) return;
     layer.clearLayers();
-    var ohf=$('map-oh').value, rm=$('map-rooms').value, starOnly=$('map-star').checked;
-    var shown=0;
-    items.forEach(function(x){
+    var pins=0, total=(f||[]).length;
+    (f||[]).forEach(function(x){
       if(x.la==null||x.lo==null) return;
-      if(sel.size && !sel.has(x.d)) return;
-      if(rm==='5+'){ if(!(x.r>=5)) return; } else if(rm){ if(x.r!=+rm) return; }
-      if(ohf==='any'){ if(!x.oh) return; } else if(ohf){ if(x.oh!==ohf) return; }
-      if(starOnly && !window.CPHStars.has(keyOf(x))) return;
       var m=L.circleMarker([x.la,x.lo],{radius:6,weight:1,color:'#fff',fillColor:color(x),fillOpacity:0.85});
-      m.bindPopup(popup(x)); layer.addLayer(m); shown++;
+      m.bindPopup(popup(x)); layer.addLayer(m); pins++;
     });
-    $('map-stats').textContent=shown.toLocaleString('da-DK')+' listing'+(shown===1?'':'s')+' on the map.';
+    var miss = total-pins;
+    $('map-stats').textContent = pins.toLocaleString('da-DK')+' pin'+(pins===1?'':'s')+
+      ' on the map'+(miss>0? ' ('+miss+' without coordinates)':'')+'.';
   }
   function build(){
     map=L.map('map',{preferCanvas:true,scrollWheelZoom:true}).setView([55.682,12.57],12);
@@ -1017,43 +1018,32 @@ window.CPHMap=(function(){
         if(s) s.textContent+='  (map tiles are slow or unavailable right now.)'; }
     });
     layer=L.layerGroup().addTo(map);
-    var wrap=$('map-dist-chips');
-    var allChip=document.createElement('button'); allChip.className='chip all on'; allChip.textContent='All areas';
-    allChip.onclick=function(){ sel.clear(); syncChips(); render(); }; wrap.appendChild(allChip);
-    var chipEls={};
-    Object.keys(labels).forEach(function(k){
-      var c=document.createElement('button'); c.className='chip'; c.textContent=labels[k];
-      c.onclick=function(){ if(sel.has(k)) sel.delete(k); else sel.add(k); syncChips(); render(); };
-      chipEls[k]=c; wrap.appendChild(c);
-    });
-    function syncChips(){ allChip.classList.toggle('on', sel.size===0);
-      Object.keys(chipEls).forEach(function(k){ chipEls[k].classList.toggle('on', sel.has(k)); }); }
-    var counts={}, t=todayStr();
-    items.forEach(function(x){ if(x.oh && x.oh>=t) counts[x.oh]=(counts[x.oh]||0)+1; });
-    Object.keys(counts).sort().forEach(function(d){
-      var o=document.createElement('option'); o.value=d;
-      var lbl=d; try{ lbl=new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }catch(e){}
-      o.textContent=lbl+' ('+counts[d]+')'; $('map-oh').appendChild(o);
-    });
-    ['map-oh','map-rooms','map-star'].forEach(function(id){ $(id).addEventListener('input',render); });
-    window.CPHStars.onChange(render);
-    render();
   }
   function whenLeaflet(cb,tries){
     if(typeof L!=='undefined' && L.map) return cb(true);
     if(tries<=0) return cb(false);
     setTimeout(function(){ whenLeaflet(cb,tries-1); }, 300);
   }
-  function onShow(){
-    if(built){ if(map) setTimeout(function(){ map.invalidateSize(); },60); return; }
+  function ensure(cb){
+    if(built){ cb(!failed); return; }
     built=true;
     whenLeaflet(function(ok){
-      if(!ok){ fallback('The map library did not load.'); return; }
-      try{ build(); setTimeout(function(){ map.invalidateSize(); },60); }
-      catch(e){ fallback('Something went wrong setting up the map.'); }
+      if(!ok){ failed=true; fallback('The map library did not load.'); cb(false); return; }
+      try{ build(); cb(true); }
+      catch(e){ failed=true; fallback('Something went wrong setting up the map.'); cb(false); }
     }, 25);
   }
-  return { onShow:onShow };
+  // show(f): called when switching to the Map view — lazily builds then draws the filtered set.
+  function show(f){
+    pending=f||pending||[];
+    ensure(function(ok){ if(!ok) return; draw(pending); setTimeout(function(){ if(map) map.invalidateSize(); },60); });
+  }
+  // update(f): called as filters change while the Map view is open.
+  function update(f){
+    pending=f||[];
+    if(built && !failed && map && layer) draw(pending);
+  }
+  return { show:show, update:update };
 })();
 </script>
 """
@@ -1108,7 +1098,6 @@ sold prices are the lagging ground truth.</p>
 <div class="asof">Generated {generated.isoformat()} · {len(snaps)} snapshot(s) · {span}</div></header>
 <nav class="tabs" role="tablist">
   <button class="tab-btn" data-tab="for-sale" role="tab">For sale</button>
-  <button class="tab-btn" data-tab="map" role="tab">Map</button>
   <button class="tab-btn" data-tab="sold" role="tab">Sold</button>
   <button class="tab-btn" data-tab="saved" role="tab">Saved <span id="tab-saved-count" class="tabcount"></span></button>
   <button class="tab-btn" data-tab="market" role="tab">Market</button>
@@ -1117,11 +1106,6 @@ sold prices are the lagging ground truth.</p>
 <section class="tabpanel" id="tab-for-sale" role="tabpanel">
 <h2 class="section">Explore the current market</h2>
 {EXPLORE_HTML}
-</section>
-
-<section class="tabpanel" id="tab-map" role="tabpanel">
-<h2 class="section">Map — listings &amp; viewings</h2>
-{MAP_HTML}
 </section>
 
 <section class="tabpanel" id="tab-sold" role="tabpanel">

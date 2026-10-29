@@ -66,6 +66,9 @@ SOLD_FIELD_CANDIDATES: dict[str, list[str]] = {
     "street": ["street", "address", "road"],
     "sold_date": ["soldDate", "saleDate", "date"],
     "sale_type": ["saleType", "saleTypeName"],
+    # Probe: does the sold feed carry coordinates? If so, a sold map becomes feasible.
+    "latitude": ["latitude", "lat"],
+    "longitude": ["longitude", "lng", "lon"],
 }
 
 USER_AGENT = (
