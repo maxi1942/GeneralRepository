@@ -252,7 +252,13 @@ def explore_payload(active: list[dict], cfg: dict) -> dict:
             continue
         dk = M.district_of(r.get("zip_code"), districts)
         est = M._to_float(r.get("est_sqm"))
+        la, lo = M._to_float(r.get("latitude")), M._to_float(r.get("longitude"))
+        # only keep coordinates that fall in a sane Copenhagen-area box (guards against
+        # stray 0/null/elsewhere values plotting in the ocean)
+        geo = (54.0 < (la or 0) < 58.0 and 11.0 < (lo or 0) < 13.0)
         items.append({
+            "la": round(la, 5) if geo else None,     # latitude (for the map)
+            "lo": round(lo, 5) if geo else None,     # longitude
             "d": dk or "other", "z": M._to_int(r.get("zip_code")),
             "u": M._to_int(r.get("id")),             # Boliga listing id (for the link)
             "s": int(size) if size else None, "r": M._to_int(r.get("rooms")),
@@ -586,6 +592,12 @@ font:inherit;font-size:14px;font-weight:600;padding:12px 10px;cursor:pointer;whi
 color:#fff;font-size:11px;font-weight:700;vertical-align:1px;}
 .tabpanel{display:none;} .tabpanel.on{display:block;}
 .tabpanel>h2.section:first-child{margin-top:4px;border-top:none;padding-top:0;}
+.mapbox{height:70vh;min-height:420px;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-top:6px;}
+.leaflet-popup-content{font:13px/1.45 system-ui,-apple-system,sans-serif;margin:10px 12px;}
+.leaflet-popup-content a{color:#2a78d6;text-decoration:none;} .leaflet-popup-content a:hover{text-decoration:underline;}
+.map-legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink2);margin:10px 0 2px;}
+.map-legend i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px;}
+.map-fallback{text-align:left;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
@@ -784,13 +796,16 @@ SAVED_HTML = """
 TABS_JS = """
 <script>
 (function(){
-  var valid={'for-sale':1,'sold':1,'saved':1,'market':1}, def='for-sale';
+  var valid={'for-sale':1,'map':1,'sold':1,'saved':1,'market':1}, def='for-sale';
   var btns=[].slice.call(document.querySelectorAll('.tab-btn'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   function show(name){
     if(!valid[name]) name=def;
     btns.forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-tab')===name); });
     panels.forEach(function(p){ p.classList.toggle('on', p.id==='tab-'+name); });
+    // the map is built lazily the first time its tab is opened, and needs a resize nudge
+    // because Leaflet can't measure a hidden container.
+    if(name==='map' && window.CPHMap) { try{ window.CPHMap.onShow(); }catch(e){} }
   }
   btns.forEach(function(b){ b.addEventListener('click', function(){
     var n=b.getAttribute('data-tab');
@@ -898,6 +913,152 @@ window.CPHStars=(function(){
 """
 
 
+MAP_HTML = """
+<section class="explore card">
+  <figcaption><h3>Map of current listings</h3>
+  <span class="sub">Plot listings by area and filter to a viewing day — handy for planning a route
+  between open houses. Loads a map from the internet; if that fails, the rest of the app still works.</span></figcaption>
+  <div class="areas"><span class="areas-lbl">Areas</span><div id="map-dist-chips" class="chips"></div></div>
+  <div class="filters">
+    <label>Open house<select id="map-oh"><option value="">Any</option>
+      <option value="any">Has a showing</option></select></label>
+    <label>Rooms<select id="map-rooms">
+      <option value="">Any</option><option>1</option><option>2</option><option>3</option>
+      <option>4</option><option value="5+">5+</option></select></label>
+    <label class="chk"><input type="checkbox" id="map-star"> ⭐ Starred only</label>
+  </div>
+  <div class="map-legend">
+    <span><i style="background:#eb6834"></i>Showing today</span>
+    <span><i style="background:#2a78d6"></i>Upcoming showing</span>
+    <span><i style="background:#9a9a94"></i>No showing date</span>
+  </div>
+  <div id="map-stats" class="more"></div>
+  <div id="map" class="mapbox"></div>
+  <p id="map-fallback" class="empty map-fallback" hidden></p>
+  <p class="methodology">Pins come straight from Boliga's coordinates (every listing has them). Colour
+  shows whether a public showing is booked. Click a pin for the address, price, showing time, a
+  <strong>📅</strong> add-to-calendar link and the listing. The map is the only part of the app that
+  loads anything from the internet — if it can't (no connection, or blocked), you'll see a notice here
+  and every other tab keeps working.</p>
+</section>
+"""
+
+# Map tab: Leaflet + OpenStreetMap tiles, built lazily on first open and fully isolated —
+# if Leaflet fails to load or anything throws, we show a fallback notice and the rest of the
+# app is untouched. Canvas-rendered circle markers (no icon images) keep ~2.5k pins smooth.
+MAP_JS = """
+<script>
+window.CPHMap=(function(){
+  var built=false, map=null, layer=null, warned=false;
+  var DATA=window.__EXPLORE__||{items:[],labels:{}};
+  var items=DATA.items, labels=DATA.labels;
+  var $=function(id){return document.getElementById(id);};
+  var sel=new Set();
+  function todayStr(){ return new Date().toISOString().slice(0,10); }
+  function pad2(n){ return (n<10?'0':'')+n; }
+  function gcal(x){
+    if(!x.oh) return null;
+    var t=(x.oht && /^\\d{2}:\\d{2}$/.test(x.oht)) ? x.oht : '11:00';
+    var hh=parseInt(t.slice(0,2),10), mm=t.slice(3,5), ds=x.oh.replace(/-/g,'');
+    var start=ds+'T'+pad2(hh)+mm+'00', end=hh>=23?ds+'T235900':ds+'T'+pad2(hh+1)+mm+'00';
+    var href=x.au?x.au:(x.u?'https://www.boliga.dk/bolig/'+x.u:'');
+    return 'https://calendar.google.com/calendar/render?action=TEMPLATE'+
+      '&text='+encodeURIComponent('Viewing: '+(x.st||'listing'))+
+      '&dates='+start+'/'+end+'&ctz=Europe/Copenhagen'+
+      '&location='+encodeURIComponent((x.st||'')+', '+(x.z||'')+' København')+
+      '&details='+encodeURIComponent('Open house / åbent hus.\\n'+(href?('Listing: '+href+'\\n'):'')+
+        '\\n(Time as Boliga lists it — confirm on the listing.)');
+  }
+  function keyOf(x){ return 'L'+(x.u || (x.st+'_'+x.z)); }
+  function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
+  function color(x){
+    if(!x.oh) return '#9a9a94';
+    return x.oh===todayStr() ? '#eb6834' : (x.oh>=todayStr() ? '#2a78d6' : '#9a9a94');
+  }
+  function fallback(msg){
+    var el=$('map-fallback'); if(el){ el.hidden=false;
+      el.innerHTML='🗺️ '+(msg||'The map could not load.')+' It needs a live connection and pulls a '+
+        'map library + tiles from the internet (the only part of this app that does). Everything else '+
+        'works — <button class="linkbtn" onclick="location.hash=\\'for-sale\\'">browse in For sale</button> '+
+        'and use the area + open-house filters there.'; }
+    var m=$('map'); if(m) m.style.display='none';
+  }
+  function popup(x){
+    var addr=(x.st||'listing').replace(/</g,'');
+    var href=x.au?x.au:(x.u?'https://www.boliga.dk/bolig/'+x.u:null);
+    var title=href?('<a target="_blank" rel="noopener" href="'+href+'">'+addr+'</a>'):addr;
+    var oh = x.oh ? ('<br><b>Open house:</b> '+x.oh+(x.oht?' '+x.oht:'')+
+       (gcal(x)&&x.oh>=todayStr()?' <a target="_blank" rel="noopener" href="'+gcal(x)+'" title="Add to Google Calendar">📅</a>':'')) : '';
+    return '<b>'+title+'</b><br>'+(labels[x.d]||'')+' · '+(x.z||'')+
+      '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh;
+  }
+  function render(){
+    if(!layer) return;
+    layer.clearLayers();
+    var ohf=$('map-oh').value, rm=$('map-rooms').value, starOnly=$('map-star').checked;
+    var shown=0;
+    items.forEach(function(x){
+      if(x.la==null||x.lo==null) return;
+      if(sel.size && !sel.has(x.d)) return;
+      if(rm==='5+'){ if(!(x.r>=5)) return; } else if(rm){ if(x.r!=+rm) return; }
+      if(ohf==='any'){ if(!x.oh) return; } else if(ohf){ if(x.oh!==ohf) return; }
+      if(starOnly && !window.CPHStars.has(keyOf(x))) return;
+      var m=L.circleMarker([x.la,x.lo],{radius:6,weight:1,color:'#fff',fillColor:color(x),fillOpacity:0.85});
+      m.bindPopup(popup(x)); layer.addLayer(m); shown++;
+    });
+    $('map-stats').textContent=shown.toLocaleString('da-DK')+' listing'+(shown===1?'':'s')+' on the map.';
+  }
+  function build(){
+    map=L.map('map',{preferCanvas:true,scrollWheelZoom:true}).setView([55.682,12.57],12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      maxZoom:19, attribution:'&copy; OpenStreetMap'
+    }).addTo(map).on('tileerror', function(){
+      if(!warned){ warned=true; var s=$('map-stats');
+        if(s) s.textContent+='  (map tiles are slow or unavailable right now.)'; }
+    });
+    layer=L.layerGroup().addTo(map);
+    var wrap=$('map-dist-chips');
+    var allChip=document.createElement('button'); allChip.className='chip all on'; allChip.textContent='All areas';
+    allChip.onclick=function(){ sel.clear(); syncChips(); render(); }; wrap.appendChild(allChip);
+    var chipEls={};
+    Object.keys(labels).forEach(function(k){
+      var c=document.createElement('button'); c.className='chip'; c.textContent=labels[k];
+      c.onclick=function(){ if(sel.has(k)) sel.delete(k); else sel.add(k); syncChips(); render(); };
+      chipEls[k]=c; wrap.appendChild(c);
+    });
+    function syncChips(){ allChip.classList.toggle('on', sel.size===0);
+      Object.keys(chipEls).forEach(function(k){ chipEls[k].classList.toggle('on', sel.has(k)); }); }
+    var counts={}, t=todayStr();
+    items.forEach(function(x){ if(x.oh && x.oh>=t) counts[x.oh]=(counts[x.oh]||0)+1; });
+    Object.keys(counts).sort().forEach(function(d){
+      var o=document.createElement('option'); o.value=d;
+      var lbl=d; try{ lbl=new Date(d+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'}); }catch(e){}
+      o.textContent=lbl+' ('+counts[d]+')'; $('map-oh').appendChild(o);
+    });
+    ['map-oh','map-rooms','map-star'].forEach(function(id){ $(id).addEventListener('input',render); });
+    window.CPHStars.onChange(render);
+    render();
+  }
+  function whenLeaflet(cb,tries){
+    if(typeof L!=='undefined' && L.map) return cb(true);
+    if(tries<=0) return cb(false);
+    setTimeout(function(){ whenLeaflet(cb,tries-1); }, 300);
+  }
+  function onShow(){
+    if(built){ if(map) setTimeout(function(){ map.invalidateSize(); },60); return; }
+    built=true;
+    whenLeaflet(function(ok){
+      if(!ok){ fallback('The map library did not load.'); return; }
+      try{ build(); setTimeout(function(){ map.invalidateSize(); },60); }
+      catch(e){ fallback('Something went wrong setting up the map.'); }
+    }, 25);
+  }
+  return { onShow:onShow };
+})();
+</script>
+"""
+
+
 def build_html(rows, active, sold_hist, cfg, generated) -> str:
     ptype_series = [_series(rows, seg, "median_sqm_price", lbl, slot) for seg, (lbl, slot) in PTYPE.items()]
     trend = [
@@ -935,7 +1096,10 @@ def build_html(rows, active, sold_hist, cfg, generated) -> str:
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="CPH Housing">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Copenhagen Housing Monitor</title><style>{CSS}</style></head>
+<title>Copenhagen Housing Monitor</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<style>{CSS}</style></head>
 <body><div class="wrap">
 <header><h1>Copenhagen Housing Monitor</h1>
 <p>Live-listing indicators for <strong>{html.escape(cfg['scope']['name'])}</strong>, snapshotted weekly
@@ -944,6 +1108,7 @@ sold prices are the lagging ground truth.</p>
 <div class="asof">Generated {generated.isoformat()} · {len(snaps)} snapshot(s) · {span}</div></header>
 <nav class="tabs" role="tablist">
   <button class="tab-btn" data-tab="for-sale" role="tab">For sale</button>
+  <button class="tab-btn" data-tab="map" role="tab">Map</button>
   <button class="tab-btn" data-tab="sold" role="tab">Sold</button>
   <button class="tab-btn" data-tab="saved" role="tab">Saved <span id="tab-saved-count" class="tabcount"></span></button>
   <button class="tab-btn" data-tab="market" role="tab">Market</button>
@@ -952,6 +1117,11 @@ sold prices are the lagging ground truth.</p>
 <section class="tabpanel" id="tab-for-sale" role="tabpanel">
 <h2 class="section">Explore the current market</h2>
 {EXPLORE_HTML}
+</section>
+
+<section class="tabpanel" id="tab-map" role="tabpanel">
+<h2 class="section">Map — listings &amp; viewings</h2>
+{MAP_HTML}
 </section>
 
 <section class="tabpanel" id="tab-sold" role="tabpanel">
@@ -988,6 +1158,7 @@ Statistik figures before any decision that matters.</div>
 {STARS_JS}
 {EXPLORE_JS}
 {SOLD_JS}
+{MAP_JS}
 </body></html>
 """
 
