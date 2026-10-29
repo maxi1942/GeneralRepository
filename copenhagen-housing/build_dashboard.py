@@ -328,7 +328,8 @@ EXPLORE_HTML = """
   <strong>“Open house”</strong> is the next public showing (åbent hus) straight from Boliga's feed —
   pick a date in the filter to see only flats showing that day. It refreshes every run, but only ~half
   of listings publish a showing date, and times are shown as Boliga lists them — always confirm on the
-  listing before turning up.
+  listing before turning up. The <strong>📅</strong> next to an upcoming showing opens Google Calendar
+  with the event pre-filled; pick which calendar (e.g. your shared one) from the dropdown before saving.
   Even clean, this is a screen to shortlist and inspect, not a valuation.</p>
 </section>
 """
@@ -362,6 +363,27 @@ EXPLORE_JS = """
   function fmtdkk(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
   function tile(label,val,unit){ return '<div class="kpi"><div class="kpi-label">'+label+
     '</div><div class="kpi-value">'+val+'<span class="unit">'+(unit||'')+'</span></div></div>'; }
+  // Build a Google Calendar "add event" link for a listing's open house. Times are the
+  // clock value Boliga provides, treated as Copenhagen local (ctz); default 11:00 and a
+  // 1h slot when no time is given. You pick the target calendar in Google before saving.
+  function pad2(n){ return (n<10?'0':'')+n; }
+  function gcalUrl(x){
+    if(!x.oh) return null;
+    var t=(x.oht && /^\\d{2}:\\d{2}$/.test(x.oht)) ? x.oht : '11:00';
+    var hh=parseInt(t.slice(0,2),10), mm=t.slice(3,5);
+    var dstr=x.oh.replace(/-/g,'');
+    var start=dstr+'T'+pad2(hh)+mm+'00';
+    var end = hh>=23 ? dstr+'T235900' : dstr+'T'+pad2(hh+1)+mm+'00';
+    var addr=(x.st||'')+', '+(x.z||'')+' København';
+    var href = x.au ? x.au : (x.u? 'https://www.boliga.dk/bolig/'+x.u : '');
+    var details='Open house / åbent hus.\\n'+(href?('Listing: '+href+'\\n'):'')+
+      '\\n(Time is as Boliga lists it — confirm on the listing before you go.)';
+    return 'https://calendar.google.com/calendar/render?action=TEMPLATE'+
+      '&text='+encodeURIComponent('Viewing: '+(x.st||'listing'))+
+      '&dates='+start+'/'+end+'&ctz=Europe/Copenhagen'+
+      '&location='+encodeURIComponent(addr)+
+      '&details='+encodeURIComponent(details);
+  }
   // populate the open-house date picker with the actual upcoming showing dates (+ counts)
   var todayStr=new Date().toISOString().slice(0,10);
   (function(){
@@ -432,8 +454,10 @@ EXPLORE_JS = """
       var isNew = (x.dom!=null && x.dom<=7);
       var listed = x.ld ? (x.ld + (isNew?' <span class="newbadge">NEW</span>':'')) : '–';
       var ohSoon = (x.oh && x.oh>=todayStr);
+      var cal = (x.oh && ohSoon) ? (' <a class="glink cal" target="_blank" rel="noopener" href="'+
+          gcalUrl(x)+'" title="Add viewing to Google Calendar">📅</a>') : '';
       var showing = x.oh ? ('<span class="'+(ohSoon?'ohnext':'ohpast')+'">'+x.oh+
-          (x.oht?' <span class="ohtime">'+x.oht+'</span>':'')+'</span>') : '–';
+          (x.oht?' <span class="ohtime">'+x.oht+'</span>':'')+'</span>'+cal) : '–';
       var k=keyOf(x), on=window.CPHStars.has(k);
       var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save">'+(on?'★':'☆')+'</button>';
       return '<tr><td>'+star+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
@@ -552,6 +576,7 @@ td.lst{font-variant-numeric:tabular-nums;color:var(--ink2);}
 .newbadge{display:inline-block;background:var(--c3);color:#fff;border-radius:4px;padding:0 5px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:1px;}
 .ohnext{color:var(--c1);font-weight:600;} .ohpast{color:var(--muted);}
 .ohtime{color:var(--muted);font-weight:400;font-size:12px;}
+.glink.cal{font-size:14px;margin-left:5px;opacity:.85;} .glink.cal:hover{opacity:1;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
