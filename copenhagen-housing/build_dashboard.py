@@ -577,6 +577,15 @@ td.lst{font-variant-numeric:tabular-nums;color:var(--ink2);}
 .ohnext{color:var(--c1);font-weight:600;} .ohpast{color:var(--muted);}
 .ohtime{color:var(--muted);font-weight:400;font-size:12px;}
 .glink.cal{font-size:14px;margin-left:5px;opacity:.85;} .glink.cal:hover{opacity:1;}
+.tabs{position:sticky;top:0;z-index:20;display:flex;gap:2px;overflow-x:auto;background:var(--plane);
+border-bottom:1px solid var(--border);margin:18px -20px 22px;padding:0 14px;-webkit-overflow-scrolling:touch;}
+.tab-btn{appearance:none;background:none;border:none;border-bottom:2px solid transparent;color:var(--ink2);
+font:inherit;font-size:14px;font-weight:600;padding:12px 10px;cursor:pointer;white-space:nowrap;}
+.tab-btn:hover{color:var(--ink);} .tab-btn.on{color:var(--c1);border-bottom-color:var(--c1);}
+.tabcount{display:inline-block;min-width:16px;padding:0 5px;border-radius:999px;background:var(--c4);
+color:#fff;font-size:11px;font-weight:700;vertical-align:1px;}
+.tabpanel{display:none;} .tabpanel.on{display:block;}
+.tabpanel>h2.section:first-child{margin-top:4px;border-top:none;padding-top:0;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
@@ -751,11 +760,14 @@ SOLD_JS = """
 
 
 SAVED_HTML = """
-<section id="saved-panel" class="card saved" hidden>
+<section id="saved-panel" class="card saved">
   <figcaption><h3>⭐ Saved listings (<span id="saved-count">0</span>) · <span id="saved-sold">0</span> sold</h3>
   <span class="sub">Starred on this device. Each one is auto-matched against the sold archive —
   when it sells, it's flagged <strong>SOLD</strong> with the price it went for vs. the asking you
   saved. <button id="saved-clear" class="linkbtn">Clear all</button></span></figcaption>
+  <p id="saved-empty" class="empty">Nothing saved yet. Tap the ☆ on any listing in
+  <strong>For sale</strong> or <strong>Sold</strong> and it shows up here — then we track what it
+  eventually sells for versus the asking you saved.</p>
   <div class="table-wrap"><table id="saved-table"><thead><tr>
     <th></th><th>Area</th><th>Address</th><th class="num">m²</th><th class="num">Your asking</th>
     <th class="num">Sold for</th><th class="num">Δ vs ask</th><th>Status</th>
@@ -765,6 +777,30 @@ SAVED_HTML = """
   moment you starred it; “Sold for” is the realised price; “Δ vs ask” is how far below (−) or above
   the asking it actually sold. Stars live in <strong>this browser</strong> only.</p>
 </section>
+"""
+
+# Tab navigation: show one panel at a time, remember the choice in the URL hash so a
+# shared/reopened link lands on the same tab. Default tab is "For sale".
+TABS_JS = """
+<script>
+(function(){
+  var valid={'for-sale':1,'sold':1,'saved':1,'market':1}, def='for-sale';
+  var btns=[].slice.call(document.querySelectorAll('.tab-btn'));
+  var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
+  function show(name){
+    if(!valid[name]) name=def;
+    btns.forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-tab')===name); });
+    panels.forEach(function(p){ p.classList.toggle('on', p.id==='tab-'+name); });
+  }
+  btns.forEach(function(b){ b.addEventListener('click', function(){
+    var n=b.getAttribute('data-tab');
+    try{ history.replaceState(null,'','#'+n); }catch(e){ location.hash=n; }
+    show(n); window.scrollTo(0,0);
+  }); });
+  window.addEventListener('hashchange', function(){ show((location.hash||'').replace('#','')); });
+  show((location.hash||'').replace('#','') || def);
+})();
+</script>
 """
 
 # Shared "star / save" module (browser localStorage) + the saved-panel renderer.
@@ -814,7 +850,12 @@ window.CPHStars=(function(){
     var panel=$('saved-panel'); if(!panel) return;
     var st=window.CPHStars.all(), keys=Object.keys(st);
     $('saved-count').textContent=keys.length;
-    panel.hidden = keys.length===0;
+    // Saved now lives in its own tab, so show an empty-state instead of hiding the panel.
+    var empty=$('saved-empty'), wrapEl=panel.querySelector('.table-wrap');
+    if(empty) empty.style.display = keys.length? 'none':'block';
+    if(wrapEl) wrapEl.style.display = keys.length? '':'none';
+    var badge=document.getElementById('tab-saved-count');
+    if(badge) badge.textContent = keys.length? keys.length : '';
     keys.sort(function(a,b){return (st[b].at||0)-(st[a].at||0);});
     var soldN=0;
     var html=keys.map(function(k){
@@ -901,8 +942,31 @@ def build_html(rows, active, sold_hist, cfg, generated) -> str:
 from Boliga. Asking prices, cuts and days-on-market are <em>leading</em> indicators; realised
 sold prices are the lagging ground truth.</p>
 <div class="asof">Generated {generated.isoformat()} · {len(snaps)} snapshot(s) · {span}</div></header>
-{kpi_tiles(rows)}
+<nav class="tabs" role="tablist">
+  <button class="tab-btn" data-tab="for-sale" role="tab">For sale</button>
+  <button class="tab-btn" data-tab="sold" role="tab">Sold</button>
+  <button class="tab-btn" data-tab="saved" role="tab">Saved <span id="tab-saved-count" class="tabcount"></span></button>
+  <button class="tab-btn" data-tab="market" role="tab">Market</button>
+</nav>
+
+<section class="tabpanel" id="tab-for-sale" role="tabpanel">
+<h2 class="section">Explore the current market</h2>
+{EXPLORE_HTML}
+</section>
+
+<section class="tabpanel" id="tab-sold" role="tabpanel">
+<h2 class="section">Sold prices — {n_sold:,} archived sales</h2>
+{SOLD_HTML}
+</section>
+
+<section class="tabpanel" id="tab-saved" role="tabpanel">
+<h2 class="section">Saved &amp; tracked</h2>
 {SAVED_HTML}
+</section>
+
+<section class="tabpanel" id="tab-market" role="tabpanel">
+<h2 class="section">Market snapshot</h2>
+{kpi_tiles(rows)}
 <div class="callout"><strong>Asking vs. sold — the key distinction.</strong>
 <b>Asking</b> = what sellers list live listings at (leading, updates weekly).
 <b>Sold (realised)</b> = what homes actually changed hands for, from the land registry
@@ -911,18 +975,16 @@ neighbourhood", read the <b>sold</b> column.</div>
 {going_rates_table(rows, cfg)}
 <h2 class="section">Market direction (weekly trend)</h2>
 <div class="grid-charts">{''.join(trend)}</div>
-<h2 class="section">Explore the current market</h2>
-{EXPLORE_HTML}
-<h2 class="section">Sold prices — {n_sold:,} archived sales</h2>
-{SOLD_HTML}
 <div class="note"><strong>Read this before trusting a trend.</strong> Asking prices are what sellers
 <em>want</em>, not what they get; realised sold prices lag ~1-3 months. District tags are by postcode
 (approximate). The source (Boliga) is an undocumented scrape that can drift. A single snapshot shows no
 direction — several consistent weeks do. Cross-check quarterly against official Finans Danmark / Danmarks
 Statistik figures before any decision that matters.</div>
+</section>
 </div>
 <script>window.__EXPLORE__ = {payload};</script>
 <script>window.__SOLD__ = {sold_pl};</script>
+{TABS_JS}
 {STARS_JS}
 {EXPLORE_JS}
 {SOLD_JS}
