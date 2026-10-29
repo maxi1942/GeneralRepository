@@ -298,8 +298,8 @@ EXPLORE_HTML = """
     <label>Energy<select id="f-energy">
       <option value="">Any</option><option>A</option><option>B</option><option>C</option>
       <option>D</option><option>E</option><option>F</option><option>G</option></select></label>
-    <label>Open house<select id="f-oh">
-      <option value="">Any</option><option value="any">Has a showing</option></select></label>
+    <label>Viewing day<select id="f-oh">
+      <option value="">Any</option><option value="any">Has a viewing</option></select></label>
     <label>Sort by<select id="f-sort">
       <option value="new">Newest listed</option>
       <option value="oh">Showing soonest</option>
@@ -320,7 +320,7 @@ EXPLORE_HTML = """
     <div class="table-wrap"><table id="ex-table"><thead><tr>
       <th></th><th>District</th><th>Street</th><th class="num">m²</th><th class="num">Rooms</th>
       <th class="num">Asking</th><th class="num">Asking /m²</th><th class="num">Est. sold /m²</th>
-      <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Open house</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
+      <th class="num">vs comps</th><th>Energy</th><th>Why cheap?</th><th>Viewing</th><th>Listed</th><th class="num">Days</th><th class="num">Cut</th>
     </tr></thead><tbody></tbody></table></div>
     <div id="ex-more" class="more"></div>
   </div>
@@ -680,6 +680,8 @@ def sold_payload(sold_hist, cfg) -> dict:
             continue
         ch = _num(r.get("change_pct"))
         bid = M._to_int(r.get("id"))
+        la, lo = M._to_float(r.get("latitude")), M._to_float(r.get("longitude"))
+        geo = (54.0 < (la or 0) < 58.0 and 11.0 < (lo or 0) < 13.0)
         items.append({
             "d": M.district_of(r.get("zip_code"), districts) or "other",
             "z": M._to_int(r.get("zip_code")), "s": M._to_int(r.get("size_m2")),
@@ -689,6 +691,8 @@ def sold_payload(sold_hist, cfg) -> dict:
             "pt": bucket(r.get("property_type")),
             "u": bid if (bid and bid > 0) else None,     # Boliga property id (has photos)
             "au": r.get("estate_url") or None,           # agent listing url
+            "la": round(la, 5) if geo else None,         # latitude (for the sold map)
+            "lo": round(lo, 5) if geo else None,         # longitude
         })
     labels["other"] = "Other Copenhagen"
     return {"items": items, "labels": labels}
@@ -716,16 +720,33 @@ SOLD_HTML = """
     </select></label>
     <label class="chk"><input type="checkbox" id="sf-star"> ⭐ Starred only</label>
   </div>
+  <div class="viewtoggle">
+    <button id="sold-view-list-btn" class="vbtn on" type="button">☰ List</button>
+    <button id="sold-view-map-btn" class="vbtn" type="button">🗺️ Map</button>
+  </div>
   <div id="sf-stats" class="kpi-row explore-stats"></div>
-  <div class="table-wrap"><table id="sf-table"><thead><tr>
-    <th></th><th>Sold</th><th>District</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
-    <th class="num">Sold price</th><th class="num">Sold /m²</th><th class="num">vs ask</th>
-  </tr></thead><tbody></tbody></table></div>
-  <div id="sf-more" class="more"></div>
+  <div id="sf-list">
+    <div class="table-wrap"><table id="sf-table"><thead><tr>
+      <th></th><th>Sold</th><th>District</th><th>Address</th><th class="num">m²</th><th class="num">Rooms</th>
+      <th class="num">Sold price</th><th class="num">Sold /m²</th><th class="num">vs ask</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div id="sf-more" class="more"></div>
+  </div>
+  <div id="sf-map" hidden>
+    <div class="map-legend">
+      <span><i style="background:#1baf7a"></i>Sold ≥5% below ask</span>
+      <span><i style="background:#2a78d6"></i>Other sales</span>
+    </div>
+    <div id="sold-map-stats" class="more"></div>
+    <div id="sold-map" class="mapbox"></div>
+    <p id="sold-map-fallback" class="empty map-fallback" hidden></p>
+  </div>
   <p class="methodology">These are <strong>realised</strong> sale prices from the public land registry —
   what buyers actually paid — for a specific apartment (full address). “vs ask” shows how far below the
   original asking price it sold, when the feed provides it. Sales register ~1–3 months after closing, so
-  the most recent weeks are still filling in. Search a street to see what nearby flats fetched.</p>
+  the most recent weeks are still filling in. Search a street to see what nearby flats fetched. Switch to
+  <strong>🗺️ Map</strong> to see the same sales as pins. Coordinates were only just added, so older
+  archived sales fill in over the next couple of runs — a sale without coordinates yet simply isn't a pin.</p>
 </section>
 """
 
@@ -792,7 +813,21 @@ SOLD_JS = """
     }).join('');
     $('sf-table').getElementsByTagName('tbody')[0].innerHTML=top;
     $('sf-more').textContent = f.length.toLocaleString('da-DK')+' sale'+(f.length===1?'':'s')+' shown — scroll the table to see all.';
+    lastRows=f;
+    if(view==='map' && window.CPHSoldMap) window.CPHSoldMap.update(lastRows);
   }
+  // List / Map view toggle for sold — both share this filter bar.
+  var view='list', lastRows=[];
+  function setView(v){
+    view=v;
+    $('sold-view-list-btn').classList.toggle('on', v==='list');
+    $('sold-view-map-btn').classList.toggle('on', v==='map');
+    $('sf-list').hidden = (v==='map');
+    $('sf-map').hidden = (v!=='map');
+    if(v==='map' && window.CPHSoldMap) window.CPHSoldMap.show(lastRows);
+  }
+  $('sold-view-list-btn').addEventListener('click', function(){ setView('list'); });
+  $('sold-view-map-btn').addEventListener('click', function(){ setView('map'); });
   function debounce(fn,ms){var t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};}
   ['sf-type','sf-rooms','sf-smin','sf-smax','sf-sort','sf-star'].forEach(function(id){ $(id).addEventListener('input',render); });
   $('sf-street').addEventListener('input', debounce(render,160));
@@ -949,19 +984,72 @@ window.CPHStars=(function(){
 """
 
 
-# Map view inside the For-sale tab. It is DRIVEN by the For-sale filter bar — CPHMap.show(f)
-# and CPHMap.update(f) take the already-filtered listing array, so list and map always agree.
+# Map views, as a factory so For-sale and Sold each get their own instance driven by their own
+# filter bar — show(f)/update(f) take the already-filtered array, so list and map always agree.
 # Built lazily on first switch to Map and fully isolated: if Leaflet fails to load or anything
-# throws, a fallback notice shows and every other view keeps working. Canvas circle markers
-# (no icon images) keep thousands of pins smooth.
+# throws, that map shows a fallback notice and every other view keeps working. Canvas circle
+# markers (no icon images) keep thousands of pins smooth.
 MAP_JS = """
 <script>
-window.CPHMap=(function(){
-  var built=false, failed=false, map=null, layer=null, warned=false, pending=null;
-  var labels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
+(function(){
   var $=function(id){return document.getElementById(id);};
+  function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
   function todayStr(){ return new Date().toISOString().slice(0,10); }
   function pad2(n){ return (n<10?'0':'')+n; }
+  function whenLeaflet(cb,tries){
+    if(typeof L!=='undefined' && L.map) return cb(true);
+    if(tries<=0) return cb(false);
+    setTimeout(function(){ whenLeaflet(cb,tries-1); }, 300);
+  }
+  // a generic lazy map bound to #<mapId>, #<statsId>, #<fallbackId>, drawing opts.popup/opts.color.
+  window.CPHMakeMap=function(opts){
+    var built=false, failed=false, map=null, layer=null, warned=false, pending=null;
+    function fallback(msg){
+      var el=$(opts.fallbackId); if(el){ el.hidden=false;
+        el.innerHTML='🗺️ '+(msg||'The map could not load.')+' It needs a live connection and pulls a '+
+          'map library + tiles from the internet (the only part of this app that does) — the list view '+
+          'and every other tab keep working. Switch back to <b>☰ List</b> to browse.'; }
+      var m=$(opts.mapId); if(m) m.style.display='none';
+    }
+    function draw(f){
+      if(!layer) return;
+      layer.clearLayers();
+      var pins=0, total=(f||[]).length;
+      (f||[]).forEach(function(x){
+        if(x.la==null||x.lo==null) return;
+        var m=L.circleMarker([x.la,x.lo],{radius:6,weight:1,color:'#fff',fillColor:opts.color(x),fillOpacity:0.85});
+        m.bindPopup(opts.popup(x)); layer.addLayer(m); pins++;
+      });
+      var miss=total-pins, s=$(opts.statsId);
+      if(s) s.textContent = pins.toLocaleString('da-DK')+' pin'+(pins===1?'':'s')+' on the map'+
+        (miss>0? ' ('+miss.toLocaleString('da-DK')+' without coordinates yet)':'')+'.';
+    }
+    function build(){
+      map=L.map(opts.mapId,{preferCanvas:true,scrollWheelZoom:true}).setView(opts.center||[55.682,12.57],12);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+        maxZoom:19, attribution:'&copy; OpenStreetMap'
+      }).addTo(map).on('tileerror', function(){
+        if(!warned){ warned=true; var s=$(opts.statsId);
+          if(s) s.textContent+='  (map tiles are slow or unavailable right now.)'; }
+      });
+      layer=L.layerGroup().addTo(map);
+    }
+    function ensure(cb){
+      if(built){ cb(!failed); return; }
+      built=true;
+      whenLeaflet(function(ok){
+        if(!ok){ failed=true; fallback('The map library did not load.'); cb(false); return; }
+        try{ build(); cb(true); }
+        catch(e){ failed=true; fallback('Something went wrong setting up the map.'); cb(false); }
+      }, 25);
+    }
+    return {
+      show:function(f){ pending=f||pending||[];
+        ensure(function(ok){ if(!ok) return; draw(pending); setTimeout(function(){ if(map) map.invalidateSize(); },60); }); },
+      update:function(f){ pending=f||[]; if(built && !failed && map && layer) draw(pending); }
+    };
+  };
+
   function gcal(x){
     if(!x.oh) return null;
     var t=(x.oht && /^\\d{2}:\\d{2}$/.test(x.oht)) ? x.oht : '11:00';
@@ -975,75 +1063,38 @@ window.CPHMap=(function(){
       '&details='+encodeURIComponent('Open house / åbent hus.\\n'+(href?('Listing: '+href+'\\n'):'')+
         '\\n(Time as Boliga lists it — confirm on the listing.)');
   }
-  function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
-  function color(x){
-    if(!x.oh) return '#9a9a94';
-    return x.oh===todayStr() ? '#eb6834' : (x.oh>=todayStr() ? '#2a78d6' : '#9a9a94');
-  }
-  function fallback(msg){
-    var el=$('map-fallback'); if(el){ el.hidden=false;
-      el.innerHTML='🗺️ '+(msg||'The map could not load.')+' It needs a live connection and pulls a '+
-        'map library + tiles from the internet (the only part of this app that does) — the list view '+
-        'and every other tab keep working. Switch back to <b>☰ List</b> to browse.'; }
-    var m=$('map'); if(m) m.style.display='none';
-  }
-  function popup(x){
-    var addr=(x.st||'listing').replace(/</g,'');
-    var href=x.au?x.au:(x.u?'https://www.boliga.dk/bolig/'+x.u:null);
-    var title=href?('<a target="_blank" rel="noopener" href="'+href+'">'+addr+'</a>'):addr;
-    var oh = x.oh ? ('<br><b>Open house:</b> '+x.oh+(x.oht?' '+x.oht:'')+
-       (gcal(x)&&x.oh>=todayStr()?' <a target="_blank" rel="noopener" href="'+gcal(x)+'" title="Add to Google Calendar">📅</a>':'')) : '';
-    return '<b>'+title+'</b><br>'+(labels[x.d]||'')+' · '+(x.z||'')+
-      '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh;
-  }
-  function draw(f){
-    if(!layer) return;
-    layer.clearLayers();
-    var pins=0, total=(f||[]).length;
-    (f||[]).forEach(function(x){
-      if(x.la==null||x.lo==null) return;
-      var m=L.circleMarker([x.la,x.lo],{radius:6,weight:1,color:'#fff',fillColor:color(x),fillOpacity:0.85});
-      m.bindPopup(popup(x)); layer.addLayer(m); pins++;
-    });
-    var miss = total-pins;
-    $('map-stats').textContent = pins.toLocaleString('da-DK')+' pin'+(pins===1?'':'s')+
-      ' on the map'+(miss>0? ' ('+miss+' without coordinates)':'')+'.';
-  }
-  function build(){
-    map=L.map('map',{preferCanvas:true,scrollWheelZoom:true}).setView([55.682,12.57],12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      maxZoom:19, attribution:'&copy; OpenStreetMap'
-    }).addTo(map).on('tileerror', function(){
-      if(!warned){ warned=true; var s=$('map-stats');
-        if(s) s.textContent+='  (map tiles are slow or unavailable right now.)'; }
-    });
-    layer=L.layerGroup().addTo(map);
-  }
-  function whenLeaflet(cb,tries){
-    if(typeof L!=='undefined' && L.map) return cb(true);
-    if(tries<=0) return cb(false);
-    setTimeout(function(){ whenLeaflet(cb,tries-1); }, 300);
-  }
-  function ensure(cb){
-    if(built){ cb(!failed); return; }
-    built=true;
-    whenLeaflet(function(ok){
-      if(!ok){ failed=true; fallback('The map library did not load.'); cb(false); return; }
-      try{ build(); cb(true); }
-      catch(e){ failed=true; fallback('Something went wrong setting up the map.'); cb(false); }
-    }, 25);
-  }
-  // show(f): called when switching to the Map view — lazily builds then draws the filtered set.
-  function show(f){
-    pending=f||pending||[];
-    ensure(function(ok){ if(!ok) return; draw(pending); setTimeout(function(){ if(map) map.invalidateSize(); },60); });
-  }
-  // update(f): called as filters change while the Map view is open.
-  function update(f){
-    pending=f||[];
-    if(built && !failed && map && layer) draw(pending);
-  }
-  return { show:show, update:update };
+
+  // For-sale map: pins coloured by viewing status, popups carry the showing + calendar link.
+  var fsLabels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
+  window.CPHMap=window.CPHMakeMap({
+    mapId:'map', statsId:'map-stats', fallbackId:'map-fallback',
+    color:function(x){ if(!x.oh) return '#9a9a94';
+      return x.oh===todayStr() ? '#eb6834' : (x.oh>=todayStr() ? '#2a78d6' : '#9a9a94'); },
+    popup:function(x){
+      var addr=(x.st||'listing').replace(/</g,'');
+      var href=x.au?x.au:(x.u?'https://www.boliga.dk/bolig/'+x.u:null);
+      var title=href?('<a target="_blank" rel="noopener" href="'+href+'">'+addr+'</a>'):addr;
+      var oh = x.oh ? ('<br><b>Viewing:</b> '+x.oh+(x.oht?' '+x.oht:'')+
+         (gcal(x)&&x.oh>=todayStr()?' <a target="_blank" rel="noopener" href="'+gcal(x)+'" title="Add to Google Calendar">📅</a>':'')) : '';
+      return '<b>'+title+'</b><br>'+(fsLabels[x.d]||'')+' · '+(x.z||'')+
+        '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh;
+    }
+  });
+
+  // Sold map: realised sales; pins coloured by how far below asking they sold.
+  var soLabels=(window.__SOLD__&&window.__SOLD__.labels)||{};
+  window.CPHSoldMap=window.CPHMakeMap({
+    mapId:'sold-map', statsId:'sold-map-stats', fallbackId:'sold-map-fallback',
+    color:function(x){ return (x.ch!=null && x.ch<=-5) ? '#1baf7a' : '#2a78d6'; },
+    popup:function(x){
+      var addr=(x.st||'sale').replace(/</g,'');
+      var href=x.au?x.au:(x.u?'https://www.boliga.dk/bolig/'+x.u:null);
+      var title=href?('<a target="_blank" rel="noopener" href="'+href+'">'+addr+'</a>'):addr;
+      return '<b>'+title+'</b><br>'+(soLabels[x.d]||'')+' · '+(x.z||'')+
+        '<br><b>Sold '+(x.dt||'')+':</b> '+fmt(x.p)+' DKK · '+fmt(x.sp)+' /m²'+
+        '<br>'+(x.s||'–')+' m² · '+(x.r||'–')+' rm'+(x.ch!=null?' · '+x.ch.toFixed(1)+'% vs ask':'');
+    }
+  });
 })();
 </script>
 """
