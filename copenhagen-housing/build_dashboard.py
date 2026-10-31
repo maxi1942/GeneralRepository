@@ -484,8 +484,10 @@ EXPLORE_JS = """
       var showing = x.oh ? ('<span class="'+(ohSoon?'ohnext':'ohpast')+'">'+x.oh+
           (x.oht?' <span class="ohtime">'+x.oht+'</span>':'')+'</span>'+cal) : '–';
       var k=keyOf(x), on=window.CPHStars.has(k);
-      var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save">'+(on?'★':'☆')+'</button>';
-      return '<tr><td>'+star+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
+      var pinned=!!(window.CPHViewings && window.CPHViewings.has(k));
+      var star='<button class="star'+(on?' on':'')+'" data-k="'+k+'" title="Save to watchlist">'+(on?'★':'☆')+'</button>';
+      var pin='<button class="pin'+(pinned?' on':'')+'" data-vk="'+k+'" title="Save for viewing">📌</button>';
+      return '<tr><td class="acts">'+star+pin+'</td><td>'+(labels[x.d]||'Other')+'</td><td>'+stcell+'</td><td class="num">'+
         (x.s||'–')+'</td><td class="num">'+(x.r||'–')+'</td><td class="num">'+fmtdkk(x.p)+
         '</td><td class="num">'+fmtdkk(x.sp)+'</td><td class="num"'+estTitle+'>'+est+
         (x.nc&&x.nc<8?' <span class="lowconf">n='+x.nc+'</span>':'')+
@@ -517,6 +519,7 @@ EXPLORE_JS = """
   });
   $('f-street').addEventListener('input', debounce(apply,160));
   var itemByKey={}; items.forEach(function(x){ itemByKey[keyOf(x)]=x; });
+  window.__EXPLORE_BY_KEY__=itemByKey;   // shared with the viewing planner
   $('ex-table').addEventListener('click', function(e){
     var b=e.target.closest && e.target.closest('button.star[data-k]');
     if(!b) return;
@@ -524,6 +527,7 @@ EXPLORE_JS = """
     window.CPHStars.toggle(k, x?saveData(x):{t:'active'});
   });
   window.CPHStars.onChange(apply);
+  window.__exApply=apply;   // let the viewing planner refresh pin states after it loads
   apply();
 })();
 </script>
@@ -637,6 +641,21 @@ color:#fff;font-size:11px;font-weight:700;vertical-align:1px;}
 font-weight:600;padding:7px 14px;cursor:pointer;}
 .vbtn+.vbtn{border-left:1px solid var(--border);}
 .vbtn.on{background:var(--c1);color:#fff;}
+td.acts{white-space:nowrap;}
+.pin{background:none;border:none;cursor:pointer;font-size:14px;line-height:1;padding:0 1px;opacity:.4;}
+.pin:hover{opacity:.8;} .pin.on{opacity:1;}
+.numpin{background:var(--c1);color:#fff;border-radius:50%;width:26px;height:26px;line-height:26px;
+text-align:center;font-weight:700;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.4);}
+.routebtn{display:inline-block;background:var(--c1);color:#fff;text-decoration:none;font-weight:600;
+font-size:13px;padding:9px 14px;border-radius:8px;}
+.routebtn:hover{opacity:.9;}
+.vcard{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--border);font-size:13px;flex-wrap:wrap;}
+.vnum{display:inline-block;min-width:22px;height:22px;line-height:22px;text-align:center;background:var(--c1);
+color:#fff;border-radius:50%;font-weight:700;font-size:12px;}
+.vtime{min-width:50px;font-variant-numeric:tabular-nums;color:var(--ink2);font-weight:600;}
+.vaddr{flex:1;min-width:180px;} .vmeta{color:var(--muted);font-size:12px;}
+.leg{color:var(--muted);font-size:12px;margin-left:6px;} .tight{color:#d03b3b;font-weight:600;}
+.vdel{color:var(--muted);} .viewing-actions{margin:8px 0;}
 .star{background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:0 2px;color:var(--muted);}
 .star:hover{color:var(--c4);} .star.on{color:var(--c4);}
 .saved{margin:20px 0;border-left:3px solid var(--c4);}
@@ -870,13 +889,14 @@ SAVED_HTML = """
 TABS_JS = """
 <script>
 (function(){
-  var valid={'for-sale':1,'sold':1,'saved':1,'market':1}, def='for-sale';
+  var valid={'for-sale':1,'sold':1,'viewing':1,'saved':1,'market':1}, def='for-sale';
   var btns=[].slice.call(document.querySelectorAll('.tab-btn'));
   var panels=[].slice.call(document.querySelectorAll('.tabpanel'));
   function show(name){
     if(!valid[name]) name=def;
     btns.forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-tab')===name); });
     panels.forEach(function(p){ p.classList.toggle('on', p.id==='tab-'+name); });
+    if(name==='viewing' && window.CPHViewings) { try{ window.CPHViewings.onShow(); }catch(e){} }
   }
   btns.forEach(function(b){ b.addEventListener('click', function(){
     var n=b.getAttribute('data-tab');
@@ -1014,6 +1034,7 @@ MAP_JS = """
     function draw(f){
       if(!layer) return;
       layer.clearLayers();
+      if(opts.draw){ opts.draw(f||[], map, layer, $(opts.statsId)); return; }
       var pins=0, total=(f||[]).length;
       (f||[]).forEach(function(x){
         if(x.la==null||x.lo==null) return;
@@ -1076,8 +1097,10 @@ MAP_JS = """
       var title=href?('<a target="_blank" rel="noopener" href="'+href+'">'+addr+'</a>'):addr;
       var oh = x.oh ? ('<br><b>Viewing:</b> '+x.oh+(x.oht?' '+x.oht:'')+
          (gcal(x)&&x.oh>=todayStr()?' <a target="_blank" rel="noopener" href="'+gcal(x)+'" title="Add to Google Calendar">📅</a>':'')) : '';
+      var k='L'+(x.u||(x.st+'_'+x.z));
+      var pin='<br><button class="linkbtn" data-vk="'+k+'">📌 Save for viewing</button>';
       return '<b>'+title+'</b><br>'+(fsLabels[x.d]||'')+' · '+(x.z||'')+
-        '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh;
+        '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh+pin;
     }
   });
 
@@ -1095,6 +1118,174 @@ MAP_JS = """
         '<br>'+(x.s||'–')+' m² · '+(x.r||'–')+' rm'+(x.ch!=null?' · '+x.ch.toFixed(1)+'% vs ask':'');
     }
   });
+})();
+</script>
+"""
+
+
+VIEWING_HTML = """
+<section class="explore card" id="viewing-panel">
+  <figcaption><h3>📌 Viewing plan (<span id="viewing-count">0</span>)</h3>
+  <span class="sub">Listings you saved for viewing, on this device, grouped by day. Pick a day to see the
+  stops in time order on the map and open the whole route in Google Maps.
+  <button id="viewing-clear" class="linkbtn">Clear all</button></span></figcaption>
+  <p id="viewing-empty" class="empty">Nothing planned yet. On a <strong>For sale</strong> listing — a list
+  row or a map pin — tap <strong>📌</strong> and it lands here, grouped by day with a map and a Google
+  Maps route in viewing order.</p>
+  <div id="viewing-days" class="chips"></div>
+  <div id="viewing-stats" class="more"></div>
+  <div class="viewing-actions"><a id="viewing-route" class="routebtn" target="_blank" rel="noopener" hidden>🧭 Open this day's route in Google Maps</a></div>
+  <div id="viewing-list"></div>
+  <div id="vmap" class="mapbox"></div>
+  <p id="vmap-fallback" class="empty map-fallback" hidden></p>
+  <p class="methodology">Stops are ordered by <strong>viewing time</strong> (any without a time go last,
+  slotted by nearest location); distances are straight-line, so treat them as a rough guide. A
+  <span class="tight">⚠ tight</span> flag means little time to cross a big gap — check it's doable. The
+  route opens in Google Maps with the stops in this order; pick walking / cycling / transit there. Saved
+  on <strong>this device</strong> only.</p>
+</section>
+"""
+
+# Viewing planner: a second per-device save ("save for viewing") distinct from the ⭐ watchlist,
+# grouped by day, ordered by viewing time, with a numbered route map and a Google Maps route link.
+VIEWINGS_JS = """
+<script>
+window.CPHViewings=(function(){
+  var K="cphViewings_v1", store={};
+  try{ store=JSON.parse(localStorage.getItem(K)||"{}")||{}; }catch(e){ store={}; }
+  var cbs=[];
+  function persist(){ try{ localStorage.setItem(K, JSON.stringify(store)); }catch(e){} }
+  function fire(){ cbs.forEach(function(c){ try{c();}catch(e){} }); }
+  var $=function(id){return document.getElementById(id);};
+  var labels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
+  function fmtkm(km){ return km<1? Math.round(km*1000)+" m" : km.toFixed(1)+" km"; }
+  function hav(a,b){
+    if(a.la==null||b.la==null) return null;
+    var R=6371, toR=Math.PI/180;
+    var dLa=(b.la-a.la)*toR, dLo=(b.lo-a.lo)*toR;
+    var s=Math.sin(dLa/2)*Math.sin(dLa/2)+Math.cos(a.la*toR)*Math.cos(b.la*toR)*Math.sin(dLo/2)*Math.sin(dLo/2);
+    return 2*R*Math.asin(Math.sqrt(s));
+  }
+  function dayKey(d){ return d.oh || "No date"; }
+  function order(arr){
+    var timed=arr.filter(function(x){return x.oht;}).sort(function(a,b){return (a.oht||"").localeCompare(b.oht||"");});
+    var rest=arr.filter(function(x){return !x.oht;});
+    var out=timed.slice();
+    while(rest.length){
+      var from=out.length? out[out.length-1] : rest[0], bi=0, bd=Infinity;
+      for(var i=0;i<rest.length;i++){ var d=hav(from,rest[i]); d=(d==null?1e9:d); if(d<bd){bd=d;bi=i;} }
+      out.push(rest.splice(bi,1)[0]);
+    }
+    return out;
+  }
+  var viewMap=null, selDay=null;
+  function ensureMap(){
+    if(!viewMap && window.CPHMakeMap){
+      viewMap=window.CPHMakeMap({ mapId:"vmap", statsId:"vmap-stats", fallbackId:"vmap-fallback",
+        draw:function(f, map, layer){
+          var pts=[];
+          f.forEach(function(x,i){
+            if(x.la==null||x.lo==null) return;
+            var ic=L.divIcon({className:"numpin-wrap", html:"<div class='numpin'>"+(i+1)+"</div>", iconSize:[26,26], iconAnchor:[13,13]});
+            var m=L.marker([x.la,x.lo],{icon:ic});
+            m.bindPopup("<b>"+(i+1)+". "+((x.a||"stop").replace(/</g,""))+"</b>"+(x.oht?("<br>"+(x.oh||"")+" "+x.oht):""));
+            layer.addLayer(m); pts.push([x.la,x.lo]);
+          });
+          if(pts.length>1) layer.addLayer(L.polyline(pts,{color:"#2a78d6",weight:3,opacity:0.6,dashArray:"6 6"}));
+          if(pts.length && map){ try{ map.fitBounds(L.latLngBounds(pts).pad(0.25)); }catch(e){} }
+        }
+      });
+    }
+    return viewMap;
+  }
+  function routeUrl(stops){
+    var pts=stops.filter(function(s){return s.la!=null&&s.lo!=null;}).map(function(s){return s.la+","+s.lo;});
+    if(!pts.length) return null;
+    if(pts.length===1) return "https://www.google.com/maps/dir/?api=1&destination="+encodeURIComponent(pts[0]);
+    var dest=pts[pts.length-1], wp=pts.slice(0,-1).join("|");
+    return "https://www.google.com/maps/dir/?api=1&destination="+encodeURIComponent(dest)+"&waypoints="+encodeURIComponent(wp);
+  }
+  function render(fromShow){
+    var panel=$("viewing-panel"); if(!panel) return;
+    var keys=Object.keys(store);
+    $("viewing-count").textContent=keys.length;
+    var badge=$("tab-viewing-count"); if(badge) badge.textContent=keys.length? keys.length : "";
+    var empty=$("viewing-empty"), vm=$("vmap"), rb=$("viewing-route");
+    if(!keys.length){
+      if(empty) empty.style.display="block";
+      $("viewing-days").innerHTML=""; $("viewing-list").innerHTML=""; $("viewing-stats").textContent="";
+      if(rb) rb.hidden=true; if(vm) vm.style.display="none";
+      return;
+    }
+    if(empty) empty.style.display="none"; if(vm) vm.style.display="";
+    var groups={};
+    keys.forEach(function(k){ var d=store[k]; (groups[dayKey(d)]=groups[dayKey(d)]||[]).push(Object.assign({__k:k},d)); });
+    var days=Object.keys(groups).sort(function(a,b){ if(a==="No date") return 1; if(b==="No date") return -1; return a.localeCompare(b); });
+    if(!selDay || days.indexOf(selDay)<0){
+      var today=new Date().toISOString().slice(0,10);
+      selDay=days.filter(function(d){return d!=="No date" && d>=today;})[0] || days[0];
+    }
+    var dc=$("viewing-days"); dc.innerHTML="";
+    days.forEach(function(d){
+      var b=document.createElement("button"); b.className="chip"+(d===selDay?" on":"");
+      var lbl=d; if(d!=="No date"){ try{ lbl=new Date(d+"T00:00:00").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}); }catch(e){} }
+      b.textContent=lbl+" ("+groups[d].length+")";
+      b.onclick=function(){ selDay=d; render(); };
+      dc.appendChild(b);
+    });
+    var stops=order(groups[selDay]);
+    var total=0;
+    var listHtml=stops.map(function(x,i){
+      var addr=(x.a||"stop").replace(/</g,"");
+      var href=x.au?x.au:(x.u?("https://www.boliga.dk/bolig/"+x.u):("https://www.google.com/search?q="+encodeURIComponent((x.a||"")+", "+(x.z||"")+" København")));
+      var leg="";
+      if(i>0){ var d=hav(stops[i-1],x); if(d!=null){ total+=d;
+        var tight="", t0=stops[i-1].oht, t1=x.oht;
+        if(t0&&t1){ var g=(parseInt(t1.slice(0,2),10)*60+parseInt(t1.slice(3,5),10))-(parseInt(t0.slice(0,2),10)*60+parseInt(t0.slice(3,5),10));
+          if(g>=0 && g<20 && d>2) tight=" <span class='tight'>⚠ tight</span>"; }
+        leg="<span class='leg'>"+fmtkm(d)+" from #"+i+tight+"</span>"; } }
+      return "<div class='vcard'><span class='vnum'>"+(i+1)+"</span>"+
+        "<span class='vtime'>"+(x.oht? x.oht : (x.oh? "—" : "no time"))+"</span>"+
+        "<span class='vaddr'><a target='_blank' rel='noopener' href='"+href+"'>"+addr+"</a>"+
+        " <span class='vmeta'>"+(labels[x.d]||"")+(x.z?(" · "+x.z):"")+"</span> "+leg+"</span>"+
+        "<button class='linkbtn vdel' data-vk='"+x.__k+"'>remove</button></div>";
+    }).join("");
+    $("viewing-list").innerHTML=listHtml;
+    var withco=stops.filter(function(s){return s.la!=null;}).length;
+    var first=stops.filter(function(s){return s.oht;})[0];
+    $("viewing-stats").textContent=stops.length+" stop"+(stops.length===1?"":"s")+
+      (first?(" · first at "+first.oht):"")+(total>0?(" · ~"+total.toFixed(1)+" km total (straight-line)"):"")+
+      (withco<stops.length?(" · "+(stops.length-withco)+" without map location"):"");
+    var url=routeUrl(stops);
+    if(rb){ if(url){ rb.hidden=false; rb.href=url; } else { rb.hidden=true; } }
+    var m=ensureMap();
+    if(m){ if(fromShow) m.show(stops); else m.update(stops); }
+  }
+  var api={
+    has:function(k){ return !!store[k]; },
+    toggle:function(k,d){ if(store[k]) delete store[k]; else store[k]=Object.assign({at:Date.now()},d); persist(); fire(); },
+    remove:function(k){ delete store[k]; persist(); fire(); },
+    clear:function(){ store={}; persist(); fire(); },
+    all:function(){ return store; },
+    count:function(){ return Object.keys(store).length; },
+    onChange:function(cb){ cbs.push(cb); },
+    onShow:function(){ render(true); }
+  };
+  document.addEventListener("click", function(e){
+    var del=e.target.closest && e.target.closest("button.vdel[data-vk]");
+    if(del){ api.remove(del.getAttribute("data-vk")); return; }
+    var b=e.target.closest && e.target.closest("button[data-vk]");
+    if(!b) return;
+    var k=b.getAttribute("data-vk"), idx=window.__EXPLORE_BY_KEY__||{}, x=idx[k];
+    var d = x ? {a:x.st, z:x.z, d:x.d, la:x.la, lo:x.lo, oh:x.oh, oht:x.oht, u:x.u, au:x.au} : {};
+    api.toggle(k, d);
+    if(b.classList.contains("pin")) b.classList.toggle("on", api.has(k));
+  });
+  var clr=$("viewing-clear"); if(clr) clr.onclick=function(){ if(confirm("Clear the whole viewing plan?")) api.clear(); };
+  api.onChange(function(){ render(); });
+  render();
+  if(window.__exApply) try{ window.__exApply(); }catch(e){}   // refresh pin states now that we exist
+  return api;
 })();
 </script>
 """
@@ -1150,6 +1341,7 @@ sold prices are the lagging ground truth.</p>
 <nav class="tabs" role="tablist">
   <button class="tab-btn" data-tab="for-sale" role="tab">For sale</button>
   <button class="tab-btn" data-tab="sold" role="tab">Sold</button>
+  <button class="tab-btn" data-tab="viewing" role="tab">Viewing <span id="tab-viewing-count" class="tabcount"></span></button>
   <button class="tab-btn" data-tab="saved" role="tab">Saved <span id="tab-saved-count" class="tabcount"></span></button>
   <button class="tab-btn" data-tab="market" role="tab">Market</button>
 </nav>
@@ -1162,6 +1354,11 @@ sold prices are the lagging ground truth.</p>
 <section class="tabpanel" id="tab-sold" role="tabpanel">
 <h2 class="section">Sold prices — {n_sold:,} archived sales</h2>
 {SOLD_HTML}
+</section>
+
+<section class="tabpanel" id="tab-viewing" role="tabpanel">
+<h2 class="section">Viewing plan</h2>
+{VIEWING_HTML}
 </section>
 
 <section class="tabpanel" id="tab-saved" role="tabpanel">
@@ -1194,6 +1391,7 @@ Statistik figures before any decision that matters.</div>
 {EXPLORE_JS}
 {SOLD_JS}
 {MAP_JS}
+{VIEWINGS_JS}
 </body></html>
 """
 
