@@ -1054,6 +1054,12 @@ MAP_JS = """
           if(s) s.textContent+='  (map tiles are slow or unavailable right now.)'; }
       });
       layer=L.layerGroup().addTo(map);
+      // Leaflet stops clicks inside a popup from bubbling to document-level handlers, so wire
+      // popup controls here when the popup opens.
+      if(opts.onPopupOpen) map.on('popupopen', function(e){
+        var el=e.popup && e.popup.getElement && e.popup.getElement();
+        if(el) try{ opts.onPopupOpen(el); }catch(err){}
+      });
     }
     function ensure(cb){
       if(built){ cb(!failed); return; }
@@ -1087,6 +1093,8 @@ MAP_JS = """
 
   // For-sale map: pins coloured by viewing status, popups carry the showing + calendar link.
   var fsLabels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
+  function fsKey(x){ return 'L'+(x.u||(x.st+'_'+x.z)); }
+  function pinLabel(saved){ return saved? '📌 Saved for viewing ✓' : '📌 Save for viewing'; }
   window.CPHMap=window.CPHMakeMap({
     mapId:'map', statsId:'map-stats', fallbackId:'map-fallback',
     color:function(x){ if(!x.oh) return '#9a9a94';
@@ -1097,10 +1105,22 @@ MAP_JS = """
       var title=href?('<a target="_blank" rel="noopener" href="'+href+'">'+addr+'</a>'):addr;
       var oh = x.oh ? ('<br><b>Viewing:</b> '+x.oh+(x.oht?' '+x.oht:'')+
          (gcal(x)&&x.oh>=todayStr()?' <a target="_blank" rel="noopener" href="'+gcal(x)+'" title="Add to Google Calendar">📅</a>':'')) : '';
-      var k='L'+(x.u||(x.st+'_'+x.z));
-      var pin='<br><button class="linkbtn" data-vk="'+k+'">📌 Save for viewing</button>';
+      var k=fsKey(x), saved=!!(window.CPHViewings && window.CPHViewings.has(k));
+      var pin='<br><button class="linkbtn pinbtn" data-vk="'+k+'">'+pinLabel(saved)+'</button>';
       return '<b>'+title+'</b><br>'+(fsLabels[x.d]||'')+' · '+(x.z||'')+
         '<br>'+fmt(x.p)+' DKK · '+(x.s||'–')+' m² · '+(x.r||'–')+' rm · '+fmt(x.sp)+' /m²'+oh+pin;
+    },
+    onPopupOpen:function(el){
+      var btn=el.querySelector('button.pinbtn[data-vk]');
+      if(!btn || btn.__wired) return; btn.__wired=1;
+      btn.addEventListener('click', function(ev){
+        ev.preventDefault(); ev.stopPropagation();   // don't also trigger the document-level handler
+        if(!window.CPHViewings) return;
+        var k=btn.getAttribute('data-vk'), idx=window.__EXPLORE_BY_KEY__||{}, x=idx[k];
+        var d = x ? {a:x.st,z:x.z,d:x.d,la:x.la,lo:x.lo,oh:x.oh,oht:x.oht,u:x.u,au:x.au} : {};
+        window.CPHViewings.toggle(k, d);
+        btn.textContent = pinLabel(window.CPHViewings.has(k));
+      });
     }
   });
 
