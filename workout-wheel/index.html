@@ -4,7 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Workout Wheel</title>
-  <meta name="theme-color" content="#ff6b4a">
+  <meta name="theme-color" content="#f4f5fb">
+  <meta name="color-scheme" content="light">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Workout Wheel">
@@ -15,7 +19,7 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="logo">🎡</span> Workout Wheel</div>
+    <div class="brand"><img class="logo" src="icons/icon.svg" alt=""> Workout Wheel</div>
     <div id="who" class="who"></div>
   </header>
 
@@ -54,6 +58,17 @@
         <button type="submit" class="btn primary" id="log-submit">Save workout</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="profile-dialog" class="sheet center">
+    <div id="profile-body"></div>
+    <label class="btn primary block file-btn" style="margin-top:16px">📷 Change profile photo
+      <input type="file" id="avatar-input" accept="image/*">
+    </label>
+    <div class="row" style="justify-content:space-between">
+      <button class="link" id="logout">Sign out</button>
+      <button class="btn ghost" data-close>Close</button>
+    </div>
   </dialog>
 
   <dialog id="result-dialog" class="sheet center">

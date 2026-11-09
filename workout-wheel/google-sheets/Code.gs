@@ -10,7 +10,7 @@
  */
 
 const TABS = {
-  Players: ['id', 'name', 'passcode'],
+  Players: ['id', 'name', 'passcode', 'avatar'],
   Workouts: ['id', 'user_id', 'workout_date', 'logged_at', 'activity', 'note', 'photo_path', 'deleted_at'],
   Prizes: ['id', 'name', 'emoji', 'weight', 'active', 'created_at'],
   Spins: ['id', 'user_id', 'prize_id', 'prize_name', 'prize_emoji', 'cost', 'spun_at', 'used_at'],
@@ -119,6 +119,13 @@ function handle_(me, req) {
       case 'setUsed':
         update_('Spins', req.id, { used_at: req.used ? now_() : '' });
         break;
+      case 'setAvatar': {
+        if (!req.photo) throw new Error('No photo');
+        const old = me.avatar;
+        update_('Players', me.id, { avatar: savePhoto_(me, 'avatar', req.photo, req.photo_mime) });
+        if (old) { try { DriveApp.getFileById(old).setTrashed(true); } catch (e) { /* already gone */ } }
+        break;
+      }
       default:
         throw new Error(`Unknown action: ${req.action}`);
     }
@@ -138,7 +145,7 @@ function auth_(passcode) {
 
 function state_() {
   return {
-    profiles: read_('Players').map((p) => ({ id: p.id, name: p.name })),
+    profiles: read_('Players').map((p) => ({ id: p.id, name: p.name, avatar: p.avatar })),
     workouts: read_('Workouts'),
     prizes: read_('Prizes'),
     spins: read_('Spins'),
@@ -153,7 +160,7 @@ function sheet_(name) {
 
 function read_(name) {
   const values = sheet_(name).getDataRange().getValues();
-  const headers = values[0].map(String);
+  const headers = TABS[name]; // by position, so older sheets missing a new header still read fine
   const tz = Session.getScriptTimeZone();
   return values.slice(1).filter((row) => row[0] !== '').map((row) => {
     const o = {};
@@ -171,8 +178,16 @@ function read_(name) {
   });
 }
 
+// Adds any new column headers (e.g. "avatar") to sheets created by an older version.
+function ensureHeaders_(sh, name) {
+  const headers = TABS[name];
+  const current = sh.getRange(1, 1, 1, headers.length).getValues()[0].map(String);
+  if (current.join('|') !== headers.join('|')) sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+}
+
 function append_(name, obj) {
   const sh = sheet_(name);
+  ensureHeaders_(sh, name);
   const headers = TABS[name];
   const row = sh.getLastRow() + 1;
   if (row > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 200);
@@ -189,6 +204,7 @@ function cell_(v) {
 
 function update_(name, id, patch) {
   const sh = sheet_(name);
+  ensureHeaders_(sh, name);
   const headers = TABS[name];
   const ids = sh.getRange(1, 1, sh.getLastRow(), 1).getValues().map((r) => String(r[0]));
   const idx = ids.indexOf(String(id));
