@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Workout Wheel</title>
+  <meta name="theme-color" content="#ff6b4a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Workout Wheel">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">🎡</span> Workout Wheel</div>
+    <div id="who" class="who"></div>
+  </header>
+
+  <main id="view" class="view"><p class="muted center pad">Loading…</p></main>
+
+  <nav id="tabs" class="tabs" hidden>
+    <button data-tab="home"><span>🏠</span>Home</button>
+    <button data-tab="history"><span>📜</span>History</button>
+    <button data-tab="spin"><span>🎡</span>Spin</button>
+    <button data-tab="prizes"><span>🎁</span>Prizes</button>
+    <button data-tab="points"><span>🧮</span>Points</button>
+  </nav>
+
+  <dialog id="log-dialog" class="sheet">
+    <form id="log-form" method="dialog">
+      <h2>Log a workout</h2>
+      <label>Day
+        <input type="date" name="date" required>
+      </label>
+      <p id="log-hint" class="hint" hidden></p>
+      <label>What did you do?
+        <select name="activity">
+          <option>Gym</option><option>Run</option><option>Class</option><option>Swim</option>
+          <option>Cycle</option><option>Yoga</option><option>Walk</option><option>Sport</option><option>Other</option>
+        </select>
+      </label>
+      <label>Note <span class="muted">(optional)</span>
+        <input type="text" name="note" maxlength="140" placeholder="e.g. Leg day, 5k PB">
+      </label>
+      <label class="photo-pick">📷 Add a photo <span class="muted">(optional)</span>
+        <input type="file" name="photo" accept="image/*" capture="environment">
+      </label>
+      <img id="log-preview" class="preview" alt="" hidden>
+      <div class="row">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary" id="log-submit">Save workout</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="result-dialog" class="sheet center">
+    <div id="result-body"></div>
+    <button class="btn primary" data-close>Nice!</button>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
