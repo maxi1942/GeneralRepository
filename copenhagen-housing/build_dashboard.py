@@ -876,14 +876,15 @@ SAVED_HTML = """
   eventually sells for versus the asking you saved.</p>
   <div class="table-wrap"><table id="saved-table"><thead><tr>
     <th></th><th>Area</th><th>Address</th><th class="num">m²</th><th class="num">Your asking</th>
-    <th class="num">Now / Sold</th><th class="num">Δ</th><th>Status</th>
+    <th class="num">Now (live)</th><th class="num">Sold for</th><th class="num">Δ</th><th>Status</th>
   </tr></thead><tbody></tbody></table></div>
-  <p class="methodology">“Your asking” is the price captured the moment you starred it. While a listing is
-  still for sale, <strong>“Now / Sold”</strong> is its <em>current</em> asking from the latest scan, so a
-  <span class="pricedrop">▼ price cut</span> (or ▲ rise) since you saved it shows up here; once it sells
-  (matched by address against the weekly sold archive, ~1–2 weeks after it registers) the column switches
-  to the realised price and a <span class="soldbadge">SOLD</span> badge. “Δ” is the change versus what you
-  saved. Stars live in <strong>this browser</strong> only.</p>
+  <p class="methodology">“Your asking” is the price captured the moment you starred it.
+  <strong>“Now (live)”</strong> is its <em>current</em> asking from the latest scan while it is still for
+  sale, so a <span class="pricedrop">▼ price cut</span> (or ▲ rise) since you saved it shows up here.
+  <strong>“Sold for”</strong> fills in once it actually sells (matched by address against the weekly sold
+  archive, ~1–2 weeks after it registers) with a <span class="soldbadge">SOLD</span> badge — at that point
+  it is no longer live, so “Now” clears. “Δ” is the change versus what you saved (live while listed, then
+  realised once sold). Stars live in <strong>this browser</strong> only.</p>
 </section>
 """
 
@@ -1002,7 +1003,8 @@ window.CPHStars=(function(){
         '<td>'+(labels[d.d]||'–')+'</td><td>'+link(d)+'</td>'+
         '<td class="num">'+(d.s||'–')+'</td>'+
         '<td class="num">'+fmt(ask)+'</td>'+
-        '<td class="num">'+fmt(nowVal)+'</td>'+
+        '<td class="num">'+fmt(cur?cur.p:null)+'</td>'+
+        '<td class="num">'+fmt(m?m.p:null)+'</td>'+
         '<td class="num '+dCls+'">'+dStr+'</td>'+
         '<td>'+status+'</td></tr>';
     }).join('');
