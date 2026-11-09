@@ -1,11 +1,11 @@
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
+import { SHEETS_API_URL } from './config.js';
 import {
   RULES, computePoints, toDateStr, addDays, weekStart, monthKey, monthLabel, shortDate, isBackdated,
 } from './rules.js';
 import { Wheel, pickWeighted } from './wheel.js';
 
 const DEMO = new URLSearchParams(location.search).has('demo');
-const CONFIGURED = !SUPABASE_URL.includes('YOUR-PROJECT');
+const CONFIGURED = SHEETS_API_URL.startsWith('https://script.google.com/');
 const PLAYER_COLORS = ['var(--p0)', 'var(--p1)'];
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -26,48 +26,57 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2600);
 }
 
-// ── Data layer: Supabase, or an in-memory demo ──────────────────────────────
-async function makeApi() {
+// ── Data layer: Google Sheets (via Apps Script), or an in-memory demo ────────
+// Every write returns the full fresh state, so each action is one round trip.
+function makeApi() {
   if (DEMO) return demoApi();
-  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
-  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  const check = ({ data, error }) => { if (error) throw error; return data; };
-  const fetchAll = async (table, col) => {
-    let rows = [];
-    for (let from = 0; ; from += 1000) {
-      const page = check(await sb.from(table).select('*').order(col).range(from, from + 999));
-      rows = rows.concat(page);
-      if (page.length < 1000) return rows;
-    }
+  const KEY = 'workout-wheel-auth';
+  let mem = null;
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem(KEY)) ?? mem; } catch { return mem; } },
+    set(v) { mem = v; try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* private mode */ } },
+    clear() { mem = null; try { localStorage.removeItem(KEY); } catch { /* ignore */ } },
   };
+  let auth = store.get();
+  async function call(action, payload = {}) {
+    // No custom headers → a "simple" request, which Apps Script accepts cross-site.
+    const res = await fetch(SHEETS_API_URL, {
+      method: 'POST', body: JSON.stringify({ action, passcode: auth?.passcode, ...payload }),
+    });
+    if (!res.ok) throw new Error(`Server error (${res.status})`);
+    const data = await res.json();
+    if (data.error === 'BAD_PASSCODE') {
+      if (action !== 'login') { store.clear(); location.reload(); }
+      throw new Error('Wrong passcode');
+    }
+    if (data.error) throw new Error(data.error);
+    return data;
+  }
+  const toBase64 = (blob) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
   return {
-    async user() { return (await sb.auth.getSession()).data.session?.user ?? null; },
-    async signIn(email, password) { check(await sb.auth.signInWithPassword({ email, password })); },
-    async signOut() { await sb.auth.signOut(); },
-    async saveProfile(id, name) { check(await sb.from('profiles').upsert({ id, name })); },
-    async loadAll() {
-      const [profiles, workouts, spins, prizes] = await Promise.all([
-        fetchAll('profiles', 'created_at'), fetchAll('workouts', 'logged_at'),
-        fetchAll('spins', 'spun_at'), fetchAll('prizes', 'created_at'),
-      ]);
-      return { profiles, workouts, spins, prizes };
+    async user() { return auth?.me ?? null; },
+    async signIn(passcode) {
+      auth = { passcode: passcode.trim() };
+      const { me } = await call('login');
+      auth.me = me;
+      store.set(auth);
     },
-    async addWorkout(row) { check(await sb.from('workouts').insert(row)); },
-    async deleteWorkout(id) { check(await sb.from('workouts').update({ deleted_at: new Date().toISOString() }).eq('id', id)); },
-    async addPrize(row) { check(await sb.from('prizes').insert(row)); },
-    async updatePrize(id, patch) { check(await sb.from('prizes').update(patch).eq('id', id)); },
-    async addSpin(row) { check(await sb.from('spins').insert(row)); },
-    async setUsed(id, used) { check(await sb.from('spins').update({ used_at: used ? new Date().toISOString() : null }).eq('id', id)); },
-    async uploadPhoto(uid, blob) {
-      const path = `${uid}/${crypto.randomUUID()}.jpg`;
-      check(await sb.storage.from('workout-photos').upload(path, blob, { contentType: 'image/jpeg' }));
-      return path;
+    async signOut() { store.clear(); },
+    loadAll: () => call('load'),
+    async addWorkout(row, photo) {
+      return call('addWorkout', photo ? { ...row, photo: await toBase64(photo), photo_mime: photo.type } : row);
     },
-    async photoUrls(paths) {
-      if (!paths.length) return {};
-      const data = check(await sb.storage.from('workout-photos').createSignedUrls(paths, 3600));
-      return Object.fromEntries(data.filter((d) => d.signedUrl).map((d) => [d.path, d.signedUrl]));
-    },
+    deleteWorkout: (id) => call('deleteWorkout', { id }),
+    addPrize: (row) => call('addPrize', row),
+    updatePrize: (id, patch) => call('updatePrize', { id, ...patch }),
+    addSpin: (row) => call('addSpin', row),
+    setUsed: (id, used) => call('setUsed', { id, used }),
+    photoUrl: (id, big) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${big ? 1600 : 400}`,
   };
 }
 
@@ -99,83 +108,72 @@ function demoApi() {
   return {
     async user() { return me; },
     async signIn() {}, async signOut() { location.href = location.pathname; },
-    async saveProfile() {},
     async loadAll() { return structuredClone(db); },
-    async addWorkout(row) { db.workouts.push({ id: `w${++id}`, user_id: me.id, logged_at: now(), deleted_at: null, ...row }); },
+    async addWorkout(row, photo) {
+      db.workouts.push({ id: `w${++id}`, user_id: me.id, logged_at: now(), deleted_at: null, ...row,
+        photo_path: photo ? URL.createObjectURL(photo) : null });
+    },
     async deleteWorkout(wid) { db.workouts.find((w) => w.id === wid).deleted_at = now(); },
     async addPrize(row) { db.prizes.push({ id: `p${++id}`, active: true, created_at: now(), ...row }); },
     async updatePrize(pid, patch) { Object.assign(db.prizes.find((p) => p.id === pid), patch); },
     async addSpin(row) { db.spins.push({ id: `s${++id}`, user_id: me.id, spun_at: now(), used_at: null, ...row }); },
     async setUsed(sid, used) { db.spins.find((s) => s.id === sid).used_at = used ? now() : null; },
-    async uploadPhoto(uid, blob) { return URL.createObjectURL(blob); },
-    async photoUrls(paths) { return Object.fromEntries(paths.map((p) => [p, p])); },
+    photoUrl: (path) => path,
   };
 }
 
 // ── App state ────────────────────────────────────────────────────────────────
 let api;
-const S = { me: null, profiles: [], workouts: [], spins: [], prizes: [], pts: null, photos: {}, tab: 'home', ledgerUser: null };
+const S = { me: null, profiles: [], workouts: [], spins: [], prizes: [], pts: null, tab: 'home', ledgerUser: null };
 const view = $('#view');
 
 function player(uid) { return S.profiles.find((p) => p.id === uid) ?? { id: uid, name: '?' }; }
 function colorOf(uid) { const i = S.profiles.findIndex((p) => p.id === uid); return PLAYER_COLORS[Math.max(0, i) % 2]; }
 function orderedPlayers() { return [...S.profiles].sort((a, b) => (a.id === S.me.id ? -1 : b.id === S.me.id ? 1 : 0)); }
 
-async function reload() {
-  const data = await api.loadAll();
+// Pass the state a write returned to skip a second round trip; otherwise fetch it.
+async function reload(data) {
+  if (!data?.workouts) data = await api.loadAll();
   Object.assign(S, data);
   S.pts = computePoints({ players: S.profiles, workouts: S.workouts, spins: S.spins, today: today() });
-  const paths = S.workouts.filter((w) => w.photo_path && !w.deleted_at && !S.photos[w.photo_path]).map((w) => w.photo_path);
-  try { Object.assign(S.photos, await api.photoUrls(paths)); } catch (e) { console.warn('photos', e); }
   render();
 }
 
 // ── Boot / auth ─────────────────────────────────────────────────────────────
 async function boot() {
   if (!DEMO && !CONFIGURED) return renderSetupNeeded();
-  api = await makeApi();
+  api = makeApi();
   const user = await api.user();
   if (!user) return renderLogin();
-  S.me = { id: user.id };
-  const { profiles } = await api.loadAll();
-  const mine = profiles.find((p) => p.id === user.id);
-  if (!mine) return renderNamePrompt(user.id);
+  S.me = user;
+  const data = await api.loadAll();
+  const mine = data.profiles.find((p) => p.id === user.id);
+  if (!mine) { await api.signOut(); return renderLogin('Your player was not found in the sheet. Sign in again.'); }
   S.me = mine;
   $('#who').innerHTML = `${esc(mine.name)}${DEMO ? ' <span class="chip">demo</span>' : ''} <button class="link" id="logout">Sign out</button>`;
   $('#logout').onclick = async () => { await api.signOut(); location.reload(); };
   $('#tabs').hidden = false;
-  await reload();
+  await reload(data);
 }
 
 function renderSetupNeeded() {
   view.innerHTML = `<div class="card"><h3>Almost there 👋</h3>
-    <p>The app isn't connected to a database yet. Follow the steps in <b>workout-wheel/README.md</b>
-    and paste your Supabase details into <b>config.js</b>.</p>
+    <p>The app isn't connected to your Google Sheet yet. Follow the steps in <b>workout-wheel/README.md</b>
+    and paste your web app URL into <b>config.js</b>.</p>
     <p><a class="btn primary" href="?demo">Try the demo instead</a></p></div>`;
 }
 
-function renderLogin() {
+function renderLogin(msg = '') {
   view.innerHTML = `<div class="card"><form id="login"><h2>Sign in</h2>
-    <label>Email<input type="email" name="email" required autocomplete="username"></label>
-    <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
-    <p class="err" id="login-err"></p>
-    <button class="btn primary block">Sign in</button></form></div>`;
+    <p class="muted small">Use your personal passcode from the <b>Players</b> tab of the Google Sheet. You only need to do this once per phone.</p>
+    <label>Passcode<input type="password" name="passcode" required autocomplete="current-password"></label>
+    <p class="err" id="login-err">${esc(msg)}</p>
+    <button class="btn primary block" id="login-btn">Sign in</button></form></div>`;
   $('#login').onsubmit = async (e) => {
     e.preventDefault();
-    const f = new FormData(e.target);
-    try { await api.signIn(f.get('email'), f.get('password')); location.reload(); }
-    catch (err) { $('#login-err').textContent = err.message; }
-  };
-}
-
-function renderNamePrompt(uid) {
-  view.innerHTML = `<div class="card"><form id="name-form"><h2>What should we call you?</h2>
-    <label>Name<input type="text" name="name" maxlength="30" required></label>
-    <button class="btn primary block">Continue</button></form></div>`;
-  $('#name-form').onsubmit = async (e) => {
-    e.preventDefault();
-    await api.saveProfile(uid, new FormData(e.target).get('name').trim());
-    location.reload();
+    $('#login-btn').disabled = true;
+    try { await api.signIn(new FormData(e.target).get('passcode')); location.reload(); }
+    catch (err) { $('#login-err').textContent = err.message; $('#login-btn').disabled = false; }
   };
 }
 
@@ -258,7 +256,7 @@ function renderHistory() {
     if (w.deleted_at) chips.push(`<span class="chip warn">🗑 Deleted ${fmtStamp(w.deleted_at)}</span>`);
     else if (!S.pts.counted.get(w.id)) chips.push('<span class="chip">2nd workout that day – 0 pts</span>');
     else chips.push(`<span class="chip good">+${RULES.pointsPerWorkout}</span>`);
-    const url = w.photo_path && !w.deleted_at ? S.photos[w.photo_path] : null;
+    const url = w.photo_path && !w.deleted_at ? api.photoUrl(w.photo_path) : null;
     const canDelete = w.user_id === S.me.id && !w.deleted_at;
     return `<div class="item ${w.deleted_at ? 'deleted' : ''}" style="--pc:${colorOf(p.id)}">
       <div class="avatar">${esc(p.name[0])}</div>
@@ -269,7 +267,7 @@ function renderHistory() {
         <div class="chips">${chips.join('')}
           ${canDelete ? `<button class="link" data-action="del" data-id="${w.id}" style="margin-left:6px">Delete</button>` : ''}</div>
       </div>
-      ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener"><img class="thumb" src="${esc(url)}" alt="Workout photo" loading="lazy"></a>` : ''}
+      ${url ? `<a href="${esc(api.photoUrl(w.photo_path, true))}" target="_blank" rel="noopener"><img class="thumb" src="${esc(url)}" alt="Workout photo" loading="lazy"></a>` : ''}
     </div>`;
   }).join('');
   view.innerHTML = `<h2>History</h2><p class="muted small">Everything either of you logged. Backdated and deleted entries stay visible.</p>
@@ -332,8 +330,8 @@ function renderPrizes() {
   $('#add-prize').onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    await api.addPrize({ name: f.get('name').trim(), emoji: f.get('emoji').trim() || '🎁', weight: 1 });
-    toast('Prize added'); reload();
+    const data = await api.addPrize({ name: f.get('name').trim(), emoji: f.get('emoji').trim() || '🎁', weight: 1 });
+    toast('Prize added'); reload(data);
   };
 }
 
@@ -383,16 +381,16 @@ const actions = {
   ledger: (el) => { S.ledgerUser = el.dataset.uid; S.tab = 'points'; render(); },
   async del(el) {
     if (!confirm('Delete this workout? Its points are removed, but it stays visible (crossed out) in History.')) return;
-    await api.deleteWorkout(el.dataset.id); toast('Workout deleted'); reload();
+    const data = await api.deleteWorkout(el.dataset.id); toast('Workout deleted'); reload(data);
   },
-  async use(el) { await api.setUsed(el.dataset.id, true); toast('Enjoy! 🎉'); reload(); },
-  async unuse(el) { await api.setUsed(el.dataset.id, false); reload(); },
-  async archive(el) { await api.updatePrize(el.dataset.id, { active: false }); reload(); },
-  async restore(el) { await api.updatePrize(el.dataset.id, { active: true }); reload(); },
+  async use(el) { el.disabled = true; const d = await api.setUsed(el.dataset.id, true); toast('Enjoy! 🎉'); reload(d); },
+  async unuse(el) { reload(await api.setUsed(el.dataset.id, false)); },
+  async archive(el) { reload(await api.updatePrize(el.dataset.id, { active: false })); },
+  async restore(el) { reload(await api.updatePrize(el.dataset.id, { active: true })); },
   async weight(el) {
     const p = S.prizes.find((x) => x.id === el.dataset.id);
-    await api.updatePrize(p.id, { weight: Math.min(10, Math.max(1, p.weight + Number(el.dataset.d))) });
-    reload();
+    el.disabled = true;
+    reload(await api.updatePrize(p.id, { weight: Math.min(10, Math.max(1, p.weight + Number(el.dataset.d))) }));
   },
   async spin(el) {
     el.disabled = true;
@@ -402,12 +400,12 @@ const actions = {
     $('[data-action="spin"]').disabled = true;
     const idx = pickWeighted(prizes);
     const prize = prizes[idx];
-    await api.addSpin({ prize_id: prize.id, prize_name: prize.name, prize_emoji: prize.emoji, cost: RULES.spinCost });
+    const saved = await api.addSpin({ prize_id: prize.id, prize_name: prize.name, prize_emoji: prize.emoji, cost: RULES.spinCost });
     await wheel.spinTo(idx);                          // saved first, so closing the app mid-spin can't re-roll
     $('#result-body').innerHTML = `<div class="result-emoji">${esc(prize.emoji)}</div><h2>${esc(prize.name)}!</h2>
       <p class="muted">It's in your Prizes tab. Mark it used when you claim it.</p>`;
     $('#result-dialog').showModal();
-    $('#result-dialog').addEventListener('close', () => reload(), { once: true }); // keep the wheel where it stopped until then
+    $('#result-dialog').addEventListener('close', () => reload(saved), { once: true }); // keep the wheel where it stopped until then
   },
 };
 
@@ -473,16 +471,13 @@ logForm.addEventListener('submit', async (e) => {
   if (date > t || date < addDays(t, -RULES.maxBackdateDays)) return toast(`Pick a day within the last ${RULES.maxBackdateDays} days`);
   btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    let photo_path = null;
     const file = logForm.photo.files[0];
-    if (file) photo_path = await api.uploadPhoto(S.me.id, await shrinkPhoto(file));
-    await api.addWorkout({
-      workout_date: date, activity: logForm.activity.value,
-      note: logForm.note.value.trim() || null, photo_path,
-    });
+    const data = await api.addWorkout({
+      workout_date: date, activity: logForm.activity.value, note: logForm.note.value.trim() || null,
+    }, file ? await shrinkPhoto(file) : null);
     $('#log-dialog').close();
     toast(date < t ? 'Logged (flagged as backdated)' : 'Workout logged 💪');
-    await reload();
+    await reload(data);
   } catch (err) {
     console.error(err); toast(`Couldn't save: ${err.message}`);
   } finally {
