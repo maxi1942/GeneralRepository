@@ -404,7 +404,9 @@ window.CPHStars=(function(){
   var labels=(window.__EXPLORE__&&window.__EXPLORE__.labels)||{};
   var $=function(id){return document.getElementById(id);};
   function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
-  function norm(s){ return (s||'').toLowerCase().replace(/\s+/g,' ').trim(); }
+  // strip punctuation too: the for-sale feed writes "3. th." but the sold feed writes
+  // "3. th", so without this an apartment never matches its own sale.
+  function norm(s){ return (s||'').toLowerCase().replace(/[.,]/g,' ').replace(/\s+/g,' ').trim(); }
   function link(d){
     var addr=(d.a||'').replace(/</g,'');
     var href = d.au ? d.au : (d.u? 'https://www.boliga.dk/bolig/'+d.u
