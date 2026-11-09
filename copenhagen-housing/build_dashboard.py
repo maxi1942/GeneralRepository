@@ -662,6 +662,7 @@ color:#fff;border-radius:50%;font-weight:700;font-size:12px;}
 .saved figcaption h3{margin:0;font-size:15px;}
 .linkbtn{background:none;border:none;color:var(--c1);cursor:pointer;font:inherit;font-size:12px;padding:0;text-decoration:underline;}
 .soldbadge{display:inline-block;background:#0ca30c;color:#fff;border-radius:4px;padding:1px 7px;font-size:12px;font-weight:600;}
+.pricedrop{color:#0ca30c;font-weight:600;} .priceup{color:#d03b3b;font-weight:600;}
 .methodology{color:var(--muted);font-size:12px;line-height:1.5;margin-top:12px;}
 .methodology strong{color:var(--ink2);} .methodology em{font-style:italic;}
 .note{margin-top:32px;padding:16px 18px;background:var(--surface);border:1px solid var(--border);
@@ -875,12 +876,14 @@ SAVED_HTML = """
   eventually sells for versus the asking you saved.</p>
   <div class="table-wrap"><table id="saved-table"><thead><tr>
     <th></th><th>Area</th><th>Address</th><th class="num">m²</th><th class="num">Your asking</th>
-    <th class="num">Sold for</th><th class="num">Δ vs ask</th><th>Status</th>
+    <th class="num">Now / Sold</th><th class="num">Δ</th><th>Status</th>
   </tr></thead><tbody></tbody></table></div>
-  <p class="methodology">Matched by address against the weekly sold archive, so a sale shows up here
-  within a week or two of registering (land-registry lag). “Your asking” is the price captured the
-  moment you starred it; “Sold for” is the realised price; “Δ vs ask” is how far below (−) or above
-  the asking it actually sold. Stars live in <strong>this browser</strong> only.</p>
+  <p class="methodology">“Your asking” is the price captured the moment you starred it. While a listing is
+  still for sale, <strong>“Now / Sold”</strong> is its <em>current</em> asking from the latest scan, so a
+  <span class="pricedrop">▼ price cut</span> (or ▲ rise) since you saved it shows up here; once it sells
+  (matched by address against the weekly sold archive, ~1–2 weeks after it registers) the column switches
+  to the realised price and a <span class="soldbadge">SOLD</span> badge. “Δ” is the change versus what you
+  saved. Stars live in <strong>this browser</strong> only.</p>
 </section>
 """
 
@@ -952,6 +955,15 @@ window.CPHStars=(function(){
     if(d.u && soldById[d.u]) return soldById[d.u];
     var a=norm(d.a); return a? soldByAddr[a] : null;
   }
+  // index the CURRENT for-sale snapshot so a still-listed saved listing shows its live price
+  // (and any change since you saved it).
+  var curByAddr={}, curById={};
+  var exItems=(window.__EXPLORE__&&window.__EXPLORE__.items)||[];
+  exItems.forEach(function(x){ var a=norm(x.st); if(a && !curByAddr[a]) curByAddr[a]=x; if(x.u) curById[x.u]=x; });
+  function matchCurrent(d){
+    if(d.u && curById[d.u]) return curById[d.u];
+    var a=norm(d.a); return a? curByAddr[a] : null;
+  }
   function render(){
     var panel=$('saved-panel'); if(!panel) return;
     var st=window.CPHStars.all(), keys=Object.keys(st);
@@ -969,21 +981,26 @@ window.CPHStars=(function(){
       // a saved sold-record is already a realised sale; a saved listing we try to match
       var isSold = d.t==='sold', m = isSold? d : matchSold(d);
       var ask = isSold? null : d.p;              // price captured when starred
-      var soldFor = m? m.p : null;
+      var cur = (!isSold && !m) ? matchCurrent(d) : null;   // still-listed -> current asking
+      var nowVal = m ? m.p : (cur ? cur.p : null);
       var when = m? (m.dt||'') : '';
-      var delta=null;
-      if(soldFor!=null && ask) delta=(soldFor-ask)/ask*100;
+      var delta = (nowVal!=null && ask) ? (nowVal-ask)/ask*100 : null;
       if(m) soldN++;
       var dStr = delta==null? '–' : (delta>0?'+':'')+delta.toFixed(1)+'%';
       var dCls = delta==null? '' : (delta<0?'gap-lo':'gap-hi');
-      var status = m
-        ? '<span class="soldbadge">SOLD'+(when?' '+when:'')+'</span>'
-        : '<span class="pending">listed / watching</span>';
+      var status;
+      if(m){ status='<span class="soldbadge">SOLD'+(when?' '+when:'')+'</span>'; }
+      else if(cur){
+        if(delta!=null && delta<=-0.5) status='<span class="pricedrop">▼ price cut '+delta.toFixed(1)+'%</span>';
+        else if(delta!=null && delta>=0.5) status='<span class="priceup">▲ raised +'+delta.toFixed(1)+'%</span>';
+        else status='<span class="pending">listed / watching</span>';
+      }
+      else status='<span class="pending">not in latest scan</span>';
       return '<tr><td><button class="star on" data-sk="'+k+'" title="Remove">★</button></td>'+
         '<td>'+(labels[d.d]||'–')+'</td><td>'+link(d)+'</td>'+
         '<td class="num">'+(d.s||'–')+'</td>'+
         '<td class="num">'+fmt(ask)+'</td>'+
-        '<td class="num">'+fmt(soldFor)+'</td>'+
+        '<td class="num">'+fmt(nowVal)+'</td>'+
         '<td class="num '+dCls+'">'+dStr+'</td>'+
         '<td>'+status+'</td></tr>';
     }).join('');
