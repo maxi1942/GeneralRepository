@@ -80,3 +80,21 @@ test('a numeric passcode typed into the sheet still works', () => {
   b.sheets.get('Players').rows[1][2] = 482915; // Sheets may store it as a number
   assert.equal(b.post({ action: 'login', passcode: '482915' }).me.name, 'Max');
 });
+
+test('profile photos: works on a sheet made before the avatar column existed; old photo is trashed', () => {
+  const b = ready();
+  const players = b.sheets.get('Players').rows;
+  players.forEach((r) => r.splice(3)); // simulate the original 3-column Players tab
+  players[0] = ['id', 'name', 'passcode'];
+  let s = b.post({ action: 'load', passcode: 'max-secret' });
+  assert.equal(s.profiles[0].avatar, null);
+  const jpeg = Buffer.from('img').toString('base64');
+  s = b.post({ action: 'setAvatar', passcode: 'max-secret', photo: jpeg, photo_mime: 'image/jpeg' });
+  assert.deepEqual(players[0], ['id', 'name', 'passcode', 'avatar']);
+  assert.equal(s.profiles[0].avatar, 'file1');
+  assert.equal(s.profiles[1].avatar, null);
+  s = b.post({ action: 'setAvatar', passcode: 'max-secret', photo: jpeg, photo_mime: 'image/jpeg' });
+  assert.equal(s.profiles[0].avatar, 'file2');
+  assert.equal(b.files[0].trashed, true);
+  assert.equal(b.post({ action: 'login', passcode: 'max-secret' }).me.name, 'Max'); // passcode column untouched
+});

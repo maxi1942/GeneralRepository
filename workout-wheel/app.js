@@ -6,7 +6,7 @@ import { Wheel, pickWeighted } from './wheel.js';
 
 const DEMO = new URLSearchParams(location.search).has('demo');
 const CONFIGURED = SHEETS_API_URL.startsWith('https://script.google.com/');
-const PLAYER_COLORS = ['var(--p0)', 'var(--p1)'];
+const PLAYER_COLORS = [['var(--p0)', 'var(--p0b)'], ['var(--p1)', 'var(--p1b)']];
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 const $ = (sel) => document.querySelector(sel);
@@ -76,6 +76,7 @@ function makeApi() {
     updatePrize: (id, patch) => call('updatePrize', { id, ...patch }),
     addSpin: (row) => call('addSpin', row),
     setUsed: (id, used) => call('setUsed', { id, used }),
+    async setAvatar(photo) { return call('setAvatar', { photo: await toBase64(photo), photo_mime: photo.type }); },
     photoUrl: (id, big) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${big ? 1600 : 400}`,
   };
 }
@@ -118,6 +119,7 @@ function demoApi() {
     async updatePrize(pid, patch) { Object.assign(db.prizes.find((p) => p.id === pid), patch); },
     async addSpin(row) { db.spins.push({ id: `s${++id}`, user_id: me.id, spun_at: now(), used_at: null, ...row }); },
     async setUsed(sid, used) { db.spins.find((s) => s.id === sid).used_at = used ? now() : null; },
+    async setAvatar(photo) { db.profiles.find((p) => p.id === me.id).avatar = URL.createObjectURL(photo); },
     photoUrl: (path) => path,
   };
 }
@@ -128,7 +130,16 @@ const S = { me: null, profiles: [], workouts: [], spins: [], prizes: [], pts: nu
 const view = $('#view');
 
 function player(uid) { return S.profiles.find((p) => p.id === uid) ?? { id: uid, name: '?' }; }
-function colorOf(uid) { const i = S.profiles.findIndex((p) => p.id === uid); return PLAYER_COLORS[Math.max(0, i) % 2]; }
+// CSS variables for a player's two-tone colour, used as style="${pc(uid)}".
+function pc(uid) {
+  const [a, b] = PLAYER_COLORS[Math.max(0, S.profiles.findIndex((p) => p.id === uid)) % 2];
+  return `--pc:${a};--pcb:${b};`;
+}
+function avatar(p, size = 36) {
+  const url = p.avatar ? api.photoUrl(p.avatar) : null;
+  return `<span class="avatar" style="${pc(p.id)}width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px">${
+    url ? `<img src="${esc(url)}" alt="${esc(p.name)}">` : esc((p.name || '?')[0].toUpperCase())}</span>`;
+}
 function orderedPlayers() { return [...S.profiles].sort((a, b) => (a.id === S.me.id ? -1 : b.id === S.me.id ? 1 : 0)); }
 
 // Pass the state a write returned to skip a second round trip; otherwise fetch it.
@@ -150,7 +161,6 @@ async function boot() {
   const mine = data.profiles.find((p) => p.id === user.id);
   if (!mine) { await api.signOut(); return renderLogin('Your player was not found in the sheet. Sign in again.'); }
   S.me = mine;
-  $('#who').innerHTML = `${esc(mine.name)}${DEMO ? ' <span class="chip">demo</span>' : ''} <button class="link" id="logout">Sign out</button>`;
   $('#logout').onclick = async () => { await api.signOut(); location.reload(); };
   $('#tabs').hidden = false;
   await reload(data);
@@ -179,6 +189,8 @@ function renderLogin(msg = '') {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 function render() {
+  S.me = S.profiles.find((p) => p.id === S.me.id) ?? S.me;
+  renderHeader();
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
   ({ home: renderHome, history: renderHistory, spin: renderSpin, prizes: renderPrizes, points: renderPoints })[S.tab]();
 }
@@ -187,53 +199,150 @@ function countedDays(uid) {
   return new Set(S.workouts.filter((w) => w.user_id === uid && S.pts.counted.get(w.id)).map((w) => w.workout_date));
 }
 
+function renderHeader() {
+  $('#who').innerHTML = `${DEMO ? '<span class="chip">demo</span>' : ''}
+    <button class="me-btn" data-action="profile" aria-label="Your profile">${avatar(S.me, 38)}</button>`;
+}
+
+// Workouts that earn points (max 1/day), per player, within [from, to] (inclusive dates).
+function workoutCount(uid, from = '0000-00-00', to = '9999-99-99') {
+  return [...countedDays(uid)].filter((d) => d >= from && d <= to).length;
+}
+
+// Consecutive Mon–Sun weeks with 3+ workouts, counting back from this week (or last week if this one isn't done yet).
+function weekStreak(uid) {
+  const perWeek = new Map();
+  for (const d of countedDays(uid)) perWeek.set(weekStart(d), (perWeek.get(weekStart(d)) ?? 0) + 1);
+  const active = (m) => (perWeek.get(m) ?? 0) >= RULES.activeWeekThreshold;
+  let m = weekStart(today());
+  if (!active(m)) m = addDays(m, -7);
+  let n = 0;
+  while (active(m)) { n++; m = addDays(m, -7); }
+  return n;
+}
+
+const PERIODS = {
+  week: { label: 'Week', range: (t) => [weekStart(t), t], caption: 'this week' },
+  month: { label: 'Month', range: (t) => [`${monthKey(t)}-01`, t], caption: 'this month' },
+  year: { label: 'Year', range: (t) => [`${t.slice(0, 4)}-01-01`, t], caption: 'this year' },
+  all: { label: 'All time', range: (t) => ['0000-00-00', t], caption: 'all time' },
+};
+
+function renderLeaderboard() {
+  const t = today();
+  const period = PERIODS[S.lbPeriod] ?? PERIODS.month;
+  const [from, to] = period.range(t);
+  const rows = orderedPlayers().map((p) => ({ p, n: workoutCount(p.id, from, to), streak: weekStreak(p.id) }));
+  const max = Math.max(1, ...rows.map((r) => r.n));
+  const top = Math.max(...rows.map((r) => r.n));
+  const leaders = rows.filter((r) => r.n === top && top > 0);
+
+  const cols = rows.map(({ p, n }) => {
+    const lead = top > 0 && n === top;
+    const h = Math.max(36, Math.round((n / max) * 150));
+    return `<div class="col ${lead ? 'lead' : ''}" style="${pc(p.id)}">
+      <div class="crown ${lead ? '' : 'none'}">👑</div>
+      ${avatar(p, 58)}
+      <div class="pole" data-h="${h}">${n}</div>
+      <div class="who-name">${esc(p.name)}</div>
+    </div>`;
+  }).join('');
+
+  let caption;
+  if (top === 0) caption = `No workouts ${period.caption} yet. First one takes the crown 👀`;
+  else if (leaders.length > 1) caption = `🤝 Dead heat: ${top} each ${period.caption}`;
+  else {
+    const second = Math.max(0, ...rows.filter((r) => r !== leaders[0]).map((r) => r.n));
+    const gap = top - second;
+    caption = `${esc(leaders[0].p.name)} leads by ${gap} workout${gap === 1 ? '' : 's'} ${gap >= 4 ? '🚀' : gap >= 2 ? '🔥' : '😤'}`;
+  }
+
+  let note = '';
+  if ((S.lbPeriod ?? 'month') === 'month') {
+    const lastDay = addDays(`${monthKey(addDays(`${monthKey(t)}-28`, 7))}-01`, -1);
+    const left = Math.round((new Date(`${lastDay}T12:00:00`) - new Date(`${t}T12:00:00`)) / 864e5);
+    note = `<p class="muted small center" style="margin:2px 0 0">Month winner gets +${RULES.monthlyWinnerBonus} bonus point · ${left} day${left === 1 ? '' : 's'} left</p>`;
+  }
+  const streaks = rows.filter((r) => r.streak > 0)
+    .map((r) => `<span class="chip fire">🔥 ${esc(r.p.name)}: ${r.streak}-week streak</span>`).join('');
+
+  // Last 6 months, side-by-side bars.
+  const months = [];
+  for (let i = 5, mk = monthKey(t); i >= 0; i--) {
+    let k = mk;
+    for (let j = 0; j < i; j++) k = monthKey(addDays(`${k}-01`, -1));
+    months.push(k);
+  }
+  const monthCounts = months.map((mk) => {
+    const last = addDays(`${monthKey(addDays(`${mk}-28`, 7))}-01`, -1);
+    return rows.map(({ p }) => ({ p, n: workoutCount(p.id, `${mk}-01`, last) }));
+  });
+  const mMax = Math.max(1, ...monthCounts.flat().map((x) => x.n));
+  const monthHtml = months.map((mk, i) => {
+    const c = monthCounts[i];
+    const best = Math.max(...c.map((x) => x.n));
+    const winners = best > 0 ? c.filter((x) => x.n === best) : [];
+    const done = mk < monthKey(t);
+    return `<div class="month">
+      <div class="win">${done && winners.length === 1 ? avatar(winners[0].p, 16) : done && winners.length > 1 ? '🤝' : ''}</div>
+      <div class="bars">${c.map(({ p, n }) => `<i style="${pc(p.id)}height:${Math.round((n / mMax) * 70)}px" title="${esc(p.name)}: ${n}"></i>`).join('')}</div>
+      <div class="lbl">${monthLabel(mk).slice(0, 3)}</div></div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="lb-head"><h3 style="margin:0">🏆 Leaderboard</h3>
+      <div class="pills">${Object.entries(PERIODS).map(([k, v]) =>
+        `<button class="${k === (S.lbPeriod ?? 'month') ? 'on' : ''}" data-action="lb" data-p="${k}">${v.label}</button>`).join('')}</div></div>
+    <div class="podium">${cols}</div>
+    <div class="lb-caption">${caption}</div>
+    ${note}
+    ${streaks ? `<div class="streaks">${streaks}</div>` : ''}
+    <h3 style="margin:22px 0 0">Last 6 months</h3>
+    <div class="months">${monthHtml}</div>
+    <div class="legend">${rows.map(({ p }) => `<span style="${pc(p.id)}"><i></i>${esc(p.name)}</span>`).join('')}</div>
+  </div>`;
+}
+
 function renderHome() {
   const t = today();
   const monday = weekStart(t);
-  const mk = monthKey(t);
-  const lastDay = addDays(`${monthKey(addDays(`${mk}-28`, 7))}-01`, -1);
-  const daysLeft = Math.round((new Date(`${lastDay}T12:00:00`) - new Date(`${t}T12:00:00`)) / 864e5);
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
   const cards = orderedPlayers().map((p) => {
     const ledger = S.pts.ledgers[p.id] ?? { balance: 0 };
     const days = countedDays(p.id);
     const weekN = [...days].filter((d) => weekStart(d) === monday).length;
     const spinsReady = Math.floor(Math.max(0, ledger.balance) / RULES.spinCost);
-    const toNext = RULES.spinCost - ledger.balance;
     const pct = spinsReady ? 100 : Math.max(0, (ledger.balance / RULES.spinCost) * 100);
     const dots = [0, 1, 2, 3, 4, 5, 6].map((i) => {
       const d = addDays(monday, i);
       return `<div class="dot ${days.has(d) ? 'on' : ''} ${d === t ? 'today' : ''}">${'MTWTFSS'[i]}</div>`;
     }).join('');
-    const weekMsg = weekN >= RULES.activeWeekThreshold
-      ? `<span class="chip good">🔥 Active week bonus earned (+${RULES.activeWeekBonus})</span>`
-      : `<span class="muted small">${weekN}/${RULES.activeWeekThreshold} this week → +${RULES.activeWeekBonus} active-week bonus</span>`;
-    return `<div class="card player" style="--pc:${colorOf(p.id)}">
-      <div class="row spread"><h3>${esc(p.name)}${p.id === S.me.id ? ' (you)' : ''}</h3>
-        <button class="link" data-action="ledger" data-uid="${p.id}">See points →</button></div>
-      <div class="row spread"><div><span class="balance">${ledger.balance}</span> <span class="muted">points</span></div>
-        <div class="small ${spinsReady ? '' : 'muted'}">${spinsReady ? `🎉 <b>${spinsReady} spin${spinsReady > 1 ? 's' : ''} ready</b>` : `${toNext} to next spin`}</div></div>
+    return `<div class="card player" style="${pc(p.id)}" data-action="ledger" data-uid="${p.id}">
+      <div class="row">${avatar(p, 30)}<span class="name grow">${esc(p.name)}</span></div>
+      <div style="margin-top:12px"><span class="balance">${ledger.balance}</span> <span class="muted small">pts</span></div>
       <div class="bar"><i style="width:${Math.min(100, pct)}%"></i></div>
+      <div class="small">${spinsReady
+        ? `<span class="ready">🎉 ${spinsReady} spin${spinsReady > 1 ? 's' : ''} ready</span>`
+        : `<span class="muted">${RULES.spinCost - ledger.balance} to next spin</span>`}</div>
       <div class="dots">${dots}</div>
-      <div style="margin-top:6px">${weekMsg}</div>
+      <div class="small muted" style="margin-top:6px">${weekN >= RULES.activeWeekThreshold
+        ? '🔥 Active week!' : `${weekN}/${RULES.activeWeekThreshold} for week bonus`}</div>
     </div>`;
   }).join('');
 
-  const race = orderedPlayers().map((p) => ({ p, n: [...countedDays(p.id)].filter((d) => monthKey(d) === mk).length }));
-  const max = Math.max(0, ...race.map((r) => r.n));
-  const raceRows = race.map(({ p, n }) => `<div class="row" style="--pc:${colorOf(p.id)}; margin:6px 0">
-      <div style="width:84px" class="small">${n === max && n > 0 ? '👑 ' : ''}${esc(p.name)}</div>
-      <div class="grow bar" style="margin:0"><i style="width:${max ? (n / max) * 100 : 0}%"></i></div>
-      <b style="width:28px;text-align:right">${n}</b></div>`).join('');
-
   view.innerHTML = `
-    <button class="btn primary block big" data-action="log" style="margin-top:12px">＋ Log a workout</button>
-    ${cards}
-    <div class="card"><h3>${monthLabel(mk)} race</h3>
-      ${raceRows}
-      <p class="muted small" style="margin:6px 0 0">Most workouts when the month ends gets +${RULES.monthlyWinnerBonus} point (ties: both). ${daysLeft} day${daysLeft === 1 ? '' : 's'} left.</p>
-    </div>
+    <div class="hello">${greet}, ${esc(S.me.name)} 👋</div>
+    <p class="muted" style="margin:0 0 14px">${fmtDay(t)} · keep the streak alive</p>
+    <button class="btn primary block big" data-action="log">＋ Log a workout</button>
+    <div class="players">${cards}</div>
+    ${renderLeaderboard()}
     <p class="center"><button class="link" data-action="tab" data-tab="points">How do points work?</button></p>`;
+  // Grow the bars after they're on screen.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    document.querySelectorAll('.pole').forEach((el) => { el.style.height = `${el.dataset.h}px`; });
+  }));
 }
 
 function renderHistory() {
@@ -245,7 +354,7 @@ function renderHistory() {
   const items = events.slice(0, 200).map((e) => {
     if (e.type === 's') {
       const s = e.s, p = player(s.user_id);
-      return `<div class="item" style="--pc:${colorOf(p.id)}"><div class="avatar">${esc(p.name[0])}</div>
+      return `<div class="item" style="${pc(p.id)}">${avatar(p)}
         <div class="grow"><b>${esc(p.name)}</b> spun the wheel ${esc(s.prize_emoji)}
           <div>Won <b>${esc(s.prize_name)}</b> <span class="minus">−${s.cost}</span></div>
           <div class="muted small">${fmtStamp(s.spun_at)}</div></div></div>`;
@@ -258,8 +367,8 @@ function renderHistory() {
     else chips.push(`<span class="chip good">+${RULES.pointsPerWorkout}</span>`);
     const url = w.photo_path && !w.deleted_at ? api.photoUrl(w.photo_path) : null;
     const canDelete = w.user_id === S.me.id && !w.deleted_at;
-    return `<div class="item ${w.deleted_at ? 'deleted' : ''}" style="--pc:${colorOf(p.id)}">
-      <div class="avatar">${esc(p.name[0])}</div>
+    return `<div class="item ${w.deleted_at ? 'deleted' : ''}" style="${pc(p.id)}">
+      ${avatar(p)}
       <div class="grow">
         <div><b>${esc(p.name)}</b> · ${esc(w.activity || 'Workout')}</div>
         <div class="muted small">${fmtDay(w.workout_date)}</div>
@@ -296,7 +405,7 @@ function renderPrizes() {
   const used = S.spins.filter((s) => s.used_at).sort((a, b) => b.used_at.localeCompare(a.used_at));
   const spinRow = (s, btn) => {
     const p = player(s.user_id);
-    return `<div class="item" style="--pc:${colorOf(p.id)}"><div class="avatar">${esc(p.name[0])}</div>
+    return `<div class="item" style="${pc(p.id)}">${avatar(p)}
       <div class="grow"><b>${esc(s.prize_emoji)} ${esc(s.prize_name)}</b>
       <div class="muted small">Won by ${esc(p.name)} · ${fmtStamp(s.spun_at)}${s.used_at ? ` · used ${fmtStamp(s.used_at)}` : ''}</div></div>${btn}</div>`;
   };
@@ -377,6 +486,8 @@ function renderPoints() {
 // ── Actions ─────────────────────────────────────────────────────────────────
 const actions = {
   log: openLog,
+  lb: (el) => { S.lbPeriod = el.dataset.p; renderHome(); },
+  profile: openProfile,
   tab: (el) => { S.tab = el.dataset.tab; render(); scrollTo(0, 0); },
   ledger: (el) => { S.ledgerUser = el.dataset.uid; S.tab = 'points'; render(); },
   async del(el) {
@@ -409,6 +520,9 @@ const actions = {
   },
 };
 
+document.querySelector('.top').addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="profile"]')) openProfile();
+});
 view.addEventListener('click', (e) => {
   const el = e.target.closest('[data-action]');
   if (!el) return;
@@ -482,6 +596,46 @@ logForm.addEventListener('submit', async (e) => {
     console.error(err); toast(`Couldn't save: ${err.message}`);
   } finally {
     btn.disabled = false; btn.textContent = 'Save workout';
+  }
+});
+
+// ── Profile photo ───────────────────────────────────────────────────────────
+function openProfile() {
+  $('#profile-body').innerHTML = `${avatar(S.me, 110)}<h2 style="margin:14px 0 2px">${esc(S.me.name)}</h2>
+    <p class="muted small" style="margin:0">Your photo shows on the leaderboard and in History.</p>`;
+  $('#profile-dialog').showModal();
+}
+
+// Crop to a centred square and shrink, so profile photos are small and look right in circles.
+async function squarePhoto(file, size = 400) {
+  try {
+    const img = await createImageBitmap(file);
+    const side = Math.min(img.width, img.height);
+    const c = document.createElement('canvas');
+    c.width = c.height = Math.min(size, side);
+    c.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, c.width, c.height);
+    return await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+  } catch {
+    return file;
+  }
+}
+
+$('#avatar-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const label = e.target.closest('label');
+  label.firstChild.textContent = 'Uploading… ';
+  try {
+    const data = await api.setAvatar(await squarePhoto(file));
+    $('#profile-dialog').close();
+    toast('Looking good 😎');
+    await reload(data);
+  } catch (err) {
+    console.error(err);
+    toast(/Unknown action/.test(err.message) ? 'Update the Google script first (see Claude’s steps)' : `Couldn't save: ${err.message}`);
+  } finally {
+    label.firstChild.textContent = '📷 Change profile photo ';
+    e.target.value = '';
   }
 });
 

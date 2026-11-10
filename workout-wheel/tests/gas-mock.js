@@ -63,6 +63,7 @@ export function loadBackend() {
     DriveApp: {
       Access: { ANYONE_WITH_LINK: 'link' }, Permission: { VIEW: 'view' },
       createFolder: () => ({ getId: () => 'folder1' }),
+      getFileById: (id) => ({ setTrashed: (t) => { const f = files.find((x) => x.id === id); if (f) f.trashed = t; } }),
       getFolderById: () => ({
         createFile: (blob) => {
           const f = { id: `file${files.length + 1}`, blob, sharing: null };
