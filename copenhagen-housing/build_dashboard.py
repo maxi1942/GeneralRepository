@@ -289,9 +289,7 @@ EXPLORE_HTML = """
   <div class="areas"><span class="areas-lbl">Areas</span>
     <div id="f-dist-chips" class="chips"></div></div>
   <div class="filters">
-    <label>Rooms<select id="f-rooms">
-      <option value="">Any</option><option>1</option><option>2</option><option>3</option>
-      <option>4</option><option value="5+">5+</option></select></label>
+    <label class="chipfld">Rooms<span id="f-rooms-chips" class="chips sm"></span></label>
     <label>Min m²<input id="f-smin" type="number" min="0" step="5" placeholder="any"></label>
     <label>Max m²<input id="f-smax" type="number" min="0" step="5" placeholder="any"></label>
     <label class="grow">Street contains<input id="f-street" type="text" placeholder="e.g. Istedgade"></label>
@@ -383,6 +381,20 @@ EXPLORE_JS = """
     allChip.classList.toggle('on', sel.size===0);
     Object.keys(chipEls).forEach(function(k){ chipEls[k].classList.toggle('on', sel.has(k)); });
   }
+  // rooms filter — multi-select chips (empty = any), mirroring the area chips
+  var roomsSel=new Set(), roomWrap=$('f-rooms-chips');
+  var roomAny=document.createElement('button'); roomAny.className='chip all on'; roomAny.textContent='Any';
+  roomAny.onclick=function(){ roomsSel.clear(); syncRooms(); apply(); }; roomWrap.appendChild(roomAny);
+  var roomEls={};
+  ['1','2','3','4','5+'].forEach(function(v){
+    var c=document.createElement('button'); c.className='chip'; c.textContent=v;
+    c.onclick=function(){ if(roomsSel.has(v)) roomsSel.delete(v); else roomsSel.add(v); syncRooms(); apply(); };
+    roomEls[v]=c; roomWrap.appendChild(c);
+  });
+  function syncRooms(){ roomAny.classList.toggle('on', roomsSel.size===0);
+    Object.keys(roomEls).forEach(function(v){ roomEls[v].classList.toggle('on', roomsSel.has(v)); }); }
+  function roomsMatch(x){ if(!roomsSel.size) return true;
+    var ok=false; roomsSel.forEach(function(v){ if(v==='5+'){ if(x.r>=5) ok=true; } else if(x.r==+v) ok=true; }); return ok; }
   function median(a){ if(!a.length) return null; a=a.slice().sort(function(x,y){return x-y;});
     var m=Math.floor(a.length/2); return a.length%2? a[m] : (a[m-1]+a[m])/2; }
   function fmtdkk(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
@@ -421,14 +433,13 @@ EXPLORE_JS = """
     });
   })();
   function apply(){
-    var rm=$('f-rooms').value,
-        smin=parseFloat($('f-smin').value), smax=parseFloat($('f-smax').value),
+    var smin=parseFloat($('f-smin').value), smax=parseFloat($('f-smax').value),
         st=$('f-street').value.trim().toLowerCase(),
         en=$('f-energy').value, clean=$('f-clean').checked, starOnly=$('f-star').checked,
         ohf=$('f-oh').value;
     var f=items.filter(function(x){
       if(sel.size && !sel.has(x.d)) return false;
-      if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
+      if(!roomsMatch(x)) return false;
       if(!isNaN(smin) && (x.s==null||x.s<smin)) return false;
       if(!isNaN(smax) && (x.s==null||x.s>smax)) return false;
       if(st && x.st.toLowerCase().indexOf(st)<0) return false;
@@ -514,7 +525,7 @@ EXPLORE_JS = """
   $('view-list-btn').addEventListener('click', function(){ setView('list'); });
   $('view-map-btn').addEventListener('click', function(){ setView('map'); });
   function debounce(fn,ms){var t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};}
-  ['f-rooms','f-smin','f-smax','f-sort','f-energy','f-clean','f-star','f-oh'].forEach(function(id){
+  ['f-smin','f-smax','f-sort','f-energy','f-clean','f-star','f-oh'].forEach(function(id){
     $(id).addEventListener('input',apply);
   });
   $('f-street').addEventListener('input', debounce(apply,160));
@@ -584,6 +595,8 @@ border-radius:10px;padding:12px 16px;margin:20px 0;font-size:13px;color:var(--in
 .explore{margin-top:16px;}
 .areas{margin:14px 0 4px;} .areas-lbl{font-size:12px;color:var(--ink2);display:block;margin-bottom:6px;}
 .chips{display:flex;flex-wrap:wrap;gap:6px;}
+.chips.sm{gap:4px;margin-top:2px;} .chips.sm .chip{padding:4px 10px;font-size:12px;}
+.chipfld{gap:2px;}
 .chip{border:1px solid var(--border);background:var(--plane);color:var(--ink2);border-radius:999px;
 padding:5px 12px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.2;}
 .chip:hover{border-color:var(--c1);} .chip.on{background:var(--c1);border-color:var(--c1);color:#fff;}
@@ -727,9 +740,7 @@ SOLD_HTML = """
     <label>Type<select id="sf-type">
       <option value="">All</option><option value="apartment">Apartments</option>
       <option value="house">Houses</option></select></label>
-    <label>Rooms<select id="sf-rooms">
-      <option value="">Any</option><option>1</option><option>2</option><option>3</option>
-      <option>4</option><option value="5+">5+</option></select></label>
+    <label class="chipfld">Rooms<span id="sf-rooms-chips" class="chips sm"></span></label>
     <label>Min m²<input id="sf-smin" type="number" min="0" step="5" placeholder="any"></label>
     <label>Max m²<input id="sf-smax" type="number" min="0" step="5" placeholder="any"></label>
     <label class="grow">Street contains<input id="sf-street" type="text" placeholder="e.g. Istedgade"></label>
@@ -789,20 +800,34 @@ SOLD_JS = """
   });
   function sync(){ allChip.classList.toggle('on', sel.size===0);
     Object.keys(chipEls).forEach(function(k){ chipEls[k].classList.toggle('on', sel.has(k)); }); }
+  // rooms filter — multi-select chips (empty = any)
+  var roomsSel=new Set(), roomWrap=$('sf-rooms-chips');
+  var roomAny=document.createElement('button'); roomAny.className='chip all on'; roomAny.textContent='Any';
+  roomAny.onclick=function(){ roomsSel.clear(); syncRooms(); render(); }; roomWrap.appendChild(roomAny);
+  var roomEls={};
+  ['1','2','3','4','5+'].forEach(function(v){
+    var c=document.createElement('button'); c.className='chip'; c.textContent=v;
+    c.onclick=function(){ if(roomsSel.has(v)) roomsSel.delete(v); else roomsSel.add(v); syncRooms(); render(); };
+    roomEls[v]=c; roomWrap.appendChild(c);
+  });
+  function syncRooms(){ roomAny.classList.toggle('on', roomsSel.size===0);
+    Object.keys(roomEls).forEach(function(v){ roomEls[v].classList.toggle('on', roomsSel.has(v)); }); }
+  function roomsMatch(x){ if(!roomsSel.size) return true;
+    var ok=false; roomsSel.forEach(function(v){ if(v==='5+'){ if(x.r>=5) ok=true; } else if(x.r==+v) ok=true; }); return ok; }
   function median(a){ if(!a.length) return null; a=a.slice().sort(function(x,y){return x-y;});
     var m=Math.floor(a.length/2); return a.length%2? a[m] : (a[m-1]+a[m])/2; }
   function fmt(v){ return v==null?'–':Math.round(v).toLocaleString('da-DK'); }
   function tile(l,v,u){ return '<div class="kpi"><div class="kpi-label">'+l+'</div><div class="kpi-value">'+
     v+'<span class="unit">'+(u||'')+'</span></div></div>'; }
   function render(){
-    var ty=$('sf-type').value, rm=$('sf-rooms').value,
+    var ty=$('sf-type').value,
         smin=parseFloat($('sf-smin').value), smax=parseFloat($('sf-smax').value),
         st=$('sf-street').value.trim().toLowerCase(), sort=$('sf-sort').value,
         starOnly=$('sf-star').checked;
     var f=items.filter(function(x){
       if(sel.size && !sel.has(x.d)) return false;
       if(ty && x.pt!==ty) return false;
-      if(rm==='5+'){ if(!(x.r>=5)) return false; } else if(rm){ if(x.r!=+rm) return false; }
+      if(!roomsMatch(x)) return false;
       if(!isNaN(smin) && (x.s==null||x.s<smin)) return false;
       if(!isNaN(smax) && (x.s==null||x.s>smax)) return false;
       if(st && x.st.toLowerCase().indexOf(st)<0) return false;
@@ -849,7 +874,7 @@ SOLD_JS = """
   $('sold-view-list-btn').addEventListener('click', function(){ setView('list'); });
   $('sold-view-map-btn').addEventListener('click', function(){ setView('map'); });
   function debounce(fn,ms){var t;return function(){clearTimeout(t);t=setTimeout(fn,ms);};}
-  ['sf-type','sf-rooms','sf-smin','sf-smax','sf-sort','sf-star'].forEach(function(id){ $(id).addEventListener('input',render); });
+  ['sf-type','sf-smin','sf-smax','sf-sort','sf-star'].forEach(function(id){ $(id).addEventListener('input',render); });
   $('sf-street').addEventListener('input', debounce(render,160));
   var itemByKey={}; items.forEach(function(x){ itemByKey[keyOf(x)]=x; });
   $('sf-table').addEventListener('click', function(e){
